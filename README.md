@@ -249,6 +249,18 @@ Blueprint 会自动生成并共享：
    - Streamable HTTP：`https://你的-mcp-域名/mcp`
    - SSE：`https://你的-mcp-域名/sse`
 
+### 可选：把手机活动事件转发到 Slack
+
+在目标 Slack 私有频道配置 Incoming Webhook，然后只在 Render 的 `zhangxinchuang-server` 服务中增加：
+
+```env
+SLACK_WEBHOOK_URL=https://hooks.slack.com/services/...
+```
+
+重新部署 server 后，新写入的 `source=phone` 活动事件会以 `PEEPER_EVENT` 开头的逐行 `key=value` 消息发送到该频道。未配置或留空时不会发起 Slack 请求，现有行为不变；Slack 请求失败也不会影响活动事件保存。相同事件 ID 或服务端去重命中的事件不会重复发送。`zhangxinchuang-mcp` 不需要配置此变量。
+
+验证 App 切换事件时，在手机上从一个 App 切到另一个 App，然后在 Slack 中确认出现包含 `type=app_open`、`action=foreground_changed`、当前 `package`、`previous_package`、`occurred_at` 和 `event_id` 的消息。
+
 如果你是从旧版 0.3.6.3 更新上来，**直接重新部署 MCP 服务即可**。新版 MCP 会兼容旧环境变量：即使 `LINJIAN_URL` 仍然是旧版自动写入的 `http://zhangxinchuang-server-xxxx:10000` 内网地址，也会自动兜底转换为 `https://zhangxinchuang-server-xxxx.onrender.com` 公网地址再连接。
 
 如果你重新同步/刷新 Blueprint，新版会自动把 `LINJIAN_URL` 改为引用 server 的公网 `RENDER_EXTERNAL_URL`；如果你只点 **Redeploy**，也可以依靠新版 MCP 的兜底逻辑修复，不需要用户手动复制 URL。

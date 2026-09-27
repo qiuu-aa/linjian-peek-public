@@ -18,7 +18,7 @@ import time
 import uuid
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from threading import Lock
+from threading import Lock, Thread
 from urllib.error import HTTPError, URLError
 from urllib.parse import parse_qs, quote, unquote, urlparse
 from urllib.request import Request, urlopen
@@ -29,6 +29,7 @@ MAX_UPLOAD_BYTES = 24 * 1024 * 1024
 VERSION = "0.3.8.9"
 DEFAULT_DEVICE = os.environ.get("LINJIAN_DEFAULT_DEVICE", "android-phone")
 ACTIVITY_EVENT_LIMIT = 500
+SLACK_WEBHOOK_TIMEOUT_SECONDS = 5
 
 ERR_BAD_TOKEN = "LINJIAN_ERR_BAD_TOKEN"
 ERR_NO_IMAGE = "LINJIAN_ERR_NO_IMAGE"
@@ -205,6 +206,41 @@ def activity_type_for_action(action: str) -> str:
     return "command"
 
 
+def _slack_field(value: object) -> str:
+    """Keep the line-oriented event format parseable."""
+    return str(value or "").replace("\r", " ").replace("\n", " ").strip()
+
+
+def slack_event_text(event: dict) -> str:
+    metadata = event.get("metadata_json") or {}
+    if not isinstance(metadata, dict):
+        metadata = {}
+    fields = (
+        ("type", event.get("type")),
+        ("source", event.get("source")),
+        ("action", event.get("action")),
+        ("app", event.get("app_name")),
+        ("package", event.get("package_name")),
+        ("previous_package", metadata.get("previous_package")),
+        ("occurred_at", event.get("created_at")),
+        ("event_id", event.get("id")),
+    )
+    return "PEEPER_EVENT\n" + "\n".join(f"{key}={_slack_field(value)}" for key, value in fields)
+
+
+def post_slack_event(webhook_url: str, event: dict) -> None:
+    payload = json.dumps({"text": slack_event_text(event)}, ensure_ascii=False).encode("utf-8")
+    request = Request(
+        webhook_url,
+        data=payload,
+        headers={"Content-Type": "application/json; charset=utf-8"},
+        method="POST",
+    )
+    with urlopen(request, timeout=SLACK_WEBHOOK_TIMEOUT_SECONDS) as response:
+        # Reading the small response lets urllib finish/close the request cleanly.
+        response.read(1024)
+
+
 class State:
     def __init__(self) -> None:
         here = Path(__file__).resolve().parent
@@ -214,6 +250,7 @@ class State:
         self.host = os.environ.get("LINJIAN_HOST", "0.0.0.0")
         self.keep = int(os.environ.get("LINJIAN_KEEP", DEFAULT_KEEP))
         self.hook = os.environ.get("LINJIAN_HOOK", "").strip()
+        self.slack_webhook_url = os.environ.get("SLACK_WEBHOOK_URL", "").strip()
         data_dir = os.environ.get("LINJIAN_DATA_DIR", str(here / "data"))
         self.data_dir = Path(data_dir).resolve()
         self.shots_dir = self.data_dir / "screenshots"
@@ -246,6 +283,7 @@ class State:
         temp.replace(self.activity_path)
 
     def add_activity_event(self, data: dict, dedupe_seconds: int = 0) -> dict:
+        created = False
         with self.activity_lock:
             event_id = clip_text(str(data.get("id") or ""), 100) or str(uuid.uuid4())
             previous = next((e for e in self.activity_events if e.get("id") == event_id), None)
@@ -273,19 +311,47 @@ class State:
                     entry["created_at"] = previous.get("created_at") or entry["created_at"]
                 previous.update({k: v for k, v in entry.items() if v not in ("", None) or k in ("status", "metadata_json")})
                 self.save_activity_events()
-                return dict(previous)
-            if dedupe_seconds > 0:
+                saved = dict(previous)
+            elif dedupe_seconds > 0:
                 now = time.time()
                 duplicate = next((e for e in self.activity_events[:40]
                     if e.get("device_id") == entry["device_id"] and e.get("source") == entry["source"]
                     and e.get("type") == entry["type"] and e.get("action") == entry["action"]
                     and e.get("package_name") == entry["package_name"]
                     and now - parse_iso_seconds(e.get("created_at")) <= dedupe_seconds), None)
-                if duplicate is not None: return dict(duplicate)
-            self.activity_events.insert(0, entry)
-            del self.activity_events[ACTIVITY_EVENT_LIMIT:]
-            self.save_activity_events()
-            return dict(entry)
+                if duplicate is not None:
+                    saved = dict(duplicate)
+                else:
+                    self.activity_events.insert(0, entry)
+                    del self.activity_events[ACTIVITY_EVENT_LIMIT:]
+                    self.save_activity_events()
+                    saved = dict(entry)
+                    created = True
+            else:
+                self.activity_events.insert(0, entry)
+                del self.activity_events[ACTIVITY_EVENT_LIMIT:]
+                self.save_activity_events()
+                saved = dict(entry)
+                created = True
+        if created:
+            self._forward_activity_event(saved)
+        return saved
+
+    def _forward_activity_event(self, event: dict) -> None:
+        if not self.slack_webhook_url or event.get("source") != "phone":
+            return
+
+        def deliver() -> None:
+            try:
+                post_slack_event(self.slack_webhook_url, event)
+            except Exception as exc:
+                # Do not expose the secret webhook URL or affect the saved event.
+                sys.stderr.write(f"Slack event forwarding failed ({type(exc).__name__}).\n")
+
+        try:
+            Thread(target=deliver, name="slack-event-forward", daemon=True).start()
+        except Exception as exc:
+            sys.stderr.write(f"Slack event forwarding could not start ({type(exc).__name__}).\n")
 
     def list_activity_events(self, device_id: str = "", date: str = "", source: str = "", limit: int = 50) -> list[dict]:
         with self.activity_lock:
