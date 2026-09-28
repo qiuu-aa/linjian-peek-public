@@ -251,15 +251,22 @@ Blueprint 会自动生成并共享：
 
 ### 可选：把手机活动事件转发到 Slack
 
-在目标 Slack 私有频道配置 Incoming Webhook，然后只在 Render 的 `zhangxinchuang-server` 服务中增加：
+推荐用 Slack App 的 Bot Token 发送消息。给 Bot Token 添加 `chat:write` 权限，把该 App 加入目标私有频道，然后只在 Render 的 `zhangxinchuang-server` 服务中增加：
 
 ```env
-SLACK_WEBHOOK_URL=https://hooks.slack.com/services/...
+SLACK_BOT_TOKEN=xoxb-...
+SLACK_CHANNEL_ID=C0123456789
+SLACK_EVENT_DEBOUNCE_SECONDS=45
+SLACK_EVENT_MIN_INTERVAL_SECONDS=120
 ```
 
-重新部署 server 后，新写入的 `source=phone` 活动事件会以 `PEEPER_EVENT` 开头的逐行 `key=value` 消息发送到该频道。未配置或留空时不会发起 Slack 请求，现有行为不变；Slack 请求失败也不会影响活动事件保存。相同事件 ID 或服务端去重命中的事件不会重复发送。`zhangxinchuang-mcp` 不需要配置此变量。
+`SLACK_CHANNEL_ID` 必须是频道 ID（通常以 `C` 开头），不是频道名称。`xoxb` 属于哪个 Slack App，就要把哪个 App 加入私有频道；不要把 Token 提交到仓库。
 
-验证 App 切换事件时，在手机上从一个 App 切到另一个 App，然后在 Slack 中确认出现包含 `type=app_open`、`action=foreground_changed`、当前 `package`、`previous_package`、`occurred_at` 和 `event_id` 的消息。
+重新部署 server 后，新写入的 `source=phone` 活动事件会以 `PEEPER_EVENT` 开头的逐行 `key=value` 消息发送到该频道。频繁的 `app_open/foreground_changed` 会等待 45 秒，只发送这一段切换里的最后一次，并与上一条此类消息至少间隔 120 秒；其他手机事件仍立即发送。两个时间都可通过上面的环境变量调整，设为 `0` 可关闭合并和限频。
+
+旧版 Incoming Webhook 仍兼容：只有在 `SLACK_BOT_TOKEN` 与 `SLACK_CHANNEL_ID` 没有同时配置时，才会回退到 `SLACK_WEBHOOK_URL`。未配置任何 Slack 变量时不会发起请求；Slack 请求失败也不会影响活动事件保存。相同事件 ID 或服务端去重命中的事件不会重复发送。`zhangxinchuang-mcp` 不需要配置这些变量。
+
+验证 App 切换事件时，在手机上从一个 App 切到另一个 App，停留超过 45 秒，然后在 Slack 中确认出现包含 `type=app_open`、`action=foreground_changed`、当前 `package`、`previous_package`、`occurred_at` 和 `event_id` 的消息。
 
 如果你是从旧版 0.3.6.3 更新上来，**直接重新部署 MCP 服务即可**。新版 MCP 会兼容旧环境变量：即使 `LINJIAN_URL` 仍然是旧版自动写入的 `http://zhangxinchuang-server-xxxx:10000` 内网地址，也会自动兜底转换为 `https://zhangxinchuang-server-xxxx.onrender.com` 公网地址再连接。
 

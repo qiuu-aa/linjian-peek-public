@@ -31,7 +31,7 @@
 4. MCP 的 `LINJIAN_URL` 会自动引用 server 的公网 `RENDER_EXTERNAL_URL`，Render 一键部署不需要手动填写；旧部署只重新部署 MCP 时，新版 MCP 也会把旧的 Render 内网 `hostport` 自动兜底为公网地址。
 4. MCP 客户端填写 mcp 的 `/mcp` 或 `/sse` 地址。
 
-可选 Slack 事件转发：在目标私有频道配置 Incoming Webhook，并在 `zhangxinchuang-server` 服务增加 `SLACK_WEBHOOK_URL=https://hooks.slack.com/services/...` 后重新部署。该变量不要加到 MCP 服务。未配置时不会改变现有行为。
+可选 Slack 事件转发：给 Slack App 的 Bot Token 添加 `chat:write` 权限，把该 App 加入目标私有频道，然后在 `zhangxinchuang-server` 服务增加 `SLACK_BOT_TOKEN=xoxb-...` 与 `SLACK_CHANNEL_ID=C...` 后重新部署。可再设置 `SLACK_EVENT_DEBOUNCE_SECONDS=45` 和 `SLACK_EVENT_MIN_INTERVAL_SECONDS=120`；频繁 App 切换会合并为最后一次，其他手机事件仍立即发送。旧的 `SLACK_WEBHOOK_URL` 继续兼容，但只在 Bot Token 与频道 ID 未同时配置时使用。这些变量不要加到 MCP 服务，也不要提交真实 Token。
 
 ## 3. Railway 手动双服务部署
 
