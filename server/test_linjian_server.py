@@ -63,12 +63,13 @@ class SlackEventForwardingTests(unittest.TestCase):
         response.read.return_value = body
         return response
 
-    def test_bot_token_is_preferred_and_event_is_forwarded_once(self):
+    def test_user_token_is_preferred_and_event_is_forwarded_once(self):
         response = self.slack_response()
 
         with tempfile.TemporaryDirectory() as data_dir, \
                 patch.dict(os.environ, {
                     "LINJIAN_DATA_DIR": data_dir,
+                    "SLACK_USER_TOKEN": "xoxp-test-token",
                     "SLACK_BOT_TOKEN": "xoxb-test-token",
                     "SLACK_CHANNEL_ID": "C0C4U2ZGBDX",
                     "SLACK_WEBHOOK_URL": "https://hooks.slack.test/services/example",
@@ -86,7 +87,7 @@ class SlackEventForwardingTests(unittest.TestCase):
         request = mocked_urlopen.call_args.args[0]
         payload = json.loads(request.data.decode("utf-8"))
         self.assertEqual(request.full_url, "https://slack.com/api/chat.postMessage")
-        self.assertEqual(request.get_header("Authorization"), "Bearer xoxb-test-token")
+        self.assertEqual(request.get_header("Authorization"), "Bearer xoxp-test-token")
         self.assertEqual(payload["channel"], "C0C4U2ZGBDX")
         self.assertEqual(
             payload["text"],
@@ -101,11 +102,32 @@ class SlackEventForwardingTests(unittest.TestCase):
             "event_id=05392753-test-event",
         )
 
+    def test_bot_token_is_used_when_user_token_is_missing(self):
+        response = self.slack_response()
+        with tempfile.TemporaryDirectory() as data_dir, \
+                patch.dict(os.environ, {
+                    "LINJIAN_DATA_DIR": data_dir,
+                    "SLACK_USER_TOKEN": "",
+                    "SLACK_BOT_TOKEN": "xoxb-test-token",
+                    "SLACK_CHANNEL_ID": "C0C4U2ZGBDX",
+                    "SLACK_WEBHOOK_URL": "https://hooks.slack.test/services/example",
+                    "SLACK_EVENT_DEBOUNCE_SECONDS": "0",
+                    "SLACK_EVENT_MIN_INTERVAL_SECONDS": "0",
+                }), \
+                patch.object(linjian_server, "Thread", ImmediateThread), \
+                patch.object(linjian_server, "urlopen", return_value=response) as mocked_urlopen:
+            linjian_server.State().add_activity_event(self.phone_event())
+
+        request = mocked_urlopen.call_args.args[0]
+        self.assertEqual(request.full_url, "https://slack.com/api/chat.postMessage")
+        self.assertEqual(request.get_header("Authorization"), "Bearer xoxb-test-token")
+
     def test_webhook_is_used_when_bot_credentials_are_missing(self):
         response = self.slack_response(b"ok")
         with tempfile.TemporaryDirectory() as data_dir, \
                 patch.dict(os.environ, {
                     "LINJIAN_DATA_DIR": data_dir,
+                    "SLACK_USER_TOKEN": "",
                     "SLACK_BOT_TOKEN": "",
                     "SLACK_CHANNEL_ID": "",
                     "SLACK_WEBHOOK_URL": "https://hooks.slack.test/services/example",
@@ -128,6 +150,7 @@ class SlackEventForwardingTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as data_dir, \
                 patch.dict(os.environ, {
                     "LINJIAN_DATA_DIR": data_dir,
+                    "SLACK_USER_TOKEN": "",
                     "SLACK_BOT_TOKEN": "xoxb-test-token",
                     "SLACK_CHANNEL_ID": "C0C4U2ZGBDX",
                     "SLACK_WEBHOOK_URL": "",
@@ -153,6 +176,7 @@ class SlackEventForwardingTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as data_dir, \
                 patch.dict(os.environ, {
                     "LINJIAN_DATA_DIR": data_dir,
+                    "SLACK_USER_TOKEN": "",
                     "SLACK_BOT_TOKEN": "",
                     "SLACK_CHANNEL_ID": "",
                     "SLACK_WEBHOOK_URL": "",
@@ -170,6 +194,7 @@ class SlackEventForwardingTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as data_dir, \
                 patch.dict(os.environ, {
                     "LINJIAN_DATA_DIR": data_dir,
+                    "SLACK_USER_TOKEN": "",
                     "SLACK_BOT_TOKEN": "xoxb-test-token",
                     "SLACK_CHANNEL_ID": "C0C4U2ZGBDX",
                     "SLACK_WEBHOOK_URL": "",

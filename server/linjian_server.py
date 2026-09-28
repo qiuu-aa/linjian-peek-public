@@ -237,15 +237,22 @@ def _read_slack_response(request: Request) -> bytes:
         return response.read(4096)
 
 
-def post_slack_event(event: dict, bot_token: str = "", channel_id: str = "", webhook_url: str = "") -> None:
+def post_slack_event(
+    event: dict,
+    user_token: str = "",
+    bot_token: str = "",
+    channel_id: str = "",
+    webhook_url: str = "",
+) -> None:
     text = slack_event_text(event)
-    if bot_token and channel_id:
+    api_token = user_token or bot_token
+    if api_token and channel_id:
         payload = json.dumps({"channel": channel_id, "text": text}, ensure_ascii=False).encode("utf-8")
         request = Request(
             SLACK_API_POST_MESSAGE_URL,
             data=payload,
             headers={
-                "Authorization": f"Bearer {bot_token}",
+                "Authorization": f"Bearer {api_token}",
                 "Content-Type": "application/json; charset=utf-8",
             },
             method="POST",
@@ -289,6 +296,7 @@ class State:
         self.host = os.environ.get("LINJIAN_HOST", "0.0.0.0")
         self.keep = int(os.environ.get("LINJIAN_KEEP", DEFAULT_KEEP))
         self.hook = os.environ.get("LINJIAN_HOOK", "").strip()
+        self.slack_user_token = os.environ.get("SLACK_USER_TOKEN", "").strip()
         self.slack_bot_token = os.environ.get("SLACK_BOT_TOKEN", "").strip()
         self.slack_channel_id = os.environ.get("SLACK_CHANNEL_ID", "").strip()
         self.slack_webhook_url = os.environ.get("SLACK_WEBHOOK_URL", "").strip()
@@ -390,7 +398,8 @@ class State:
 
     def _forward_activity_event(self, event: dict) -> None:
         configured = bool(
-            (self.slack_bot_token and self.slack_channel_id) or self.slack_webhook_url
+            ((self.slack_user_token or self.slack_bot_token) and self.slack_channel_id)
+            or self.slack_webhook_url
         )
         if not configured or event.get("source") != "phone":
             return
@@ -439,6 +448,7 @@ class State:
             try:
                 post_slack_event(
                     event,
+                    user_token=self.slack_user_token,
                     bot_token=self.slack_bot_token,
                     channel_id=self.slack_channel_id,
                     webhook_url=self.slack_webhook_url,
