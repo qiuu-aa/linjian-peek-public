@@ -98,6 +98,7 @@ public final class ActivityEventStore {
             add(ctx, new JSONObject().put("source", "phone").put("type", "app_open")
                     .put("title", titleForPackage(ctx, pkg, app)).put("subtitle", subtitle)
                     .put("app_name", app).put("package_name", pkg).put("action", "foreground_changed")
+                    .put("dedupe_seconds", 300)
                     .put("status", "completed").put("metadata_json", new JSONObject().put("previous_package", previous)), true);
         } catch (Exception ignored) { }
     }
@@ -230,7 +231,9 @@ public final class ActivityEventStore {
                 HttpURLConnection c = (HttpURLConnection) new URL(base.replaceAll("/+$", "") + "/api/activity/events").openConnection();
                 c.setRequestMethod("POST"); c.setConnectTimeout(7000); c.setReadTimeout(7000); c.setDoOutput(true);
                 c.setRequestProperty("X-Auth-Token", token); c.setRequestProperty("Content-Type", "application/json; charset=utf-8");
-                try (OutputStream out = c.getOutputStream()) { out.write(event.toString().getBytes(StandardCharsets.UTF_8)); }
+                JSONObject payload = new JSONObject(event.toString());
+                if (event.has("dedupe_seconds")) payload.put("dedupe_seconds", event.optInt("dedupe_seconds", 0));
+                try (OutputStream out = c.getOutputStream()) { out.write(payload.toString().getBytes(StandardCharsets.UTF_8)); }
                 c.getResponseCode(); c.disconnect();
             } catch (Exception ignored) { }
         }, "activity-event-upload").start();
