@@ -11,8 +11,8 @@ import java.util.Map;
 
 public class AppPrefs {
     public static final String PREFS = "linjian_peek";
-    public static final String APP_VERSION_NAME = "0.3.8.9";
-    public static final int APP_VERSION_CODE = 30809;
+    public static final String APP_VERSION_NAME = "0.3.9.0";
+    public static final int APP_VERSION_CODE = 30900;
     public static final String KEY_SERVER = "server_url";
     public static final String KEY_TOKEN = "token";
     public static final String KEY_DEVICE = "device_id";
@@ -46,6 +46,13 @@ public class AppPrefs {
     public static final String KEY_JOURNEY_ENABLED = "today_journey_enabled";
     public static final String KEY_SHOW_COMPANION_ACTIONS = "show_companion_actions";
     public static final String KEY_COMPANION_FIRST_DAY = "companion_first_day_ms";
+    public static final String KEY_FOREGROUND_STABLE_SECONDS = "event_foreground_stable_seconds";
+    public static final String KEY_FOREGROUND_MERGE_MINUTES = "event_foreground_merge_minutes";
+    public static final String KEY_GLOBAL_CANDIDATE_COOLDOWN_MINUTES = "event_global_cooldown_minutes";
+    public static final String KEY_LONG_APP_SESSION_MINUTES = "event_long_app_session_minutes";
+    public static final String KEY_SHOPPING_MIN_MINUTES = "event_shopping_min_minutes";
+    public static final String KEY_MORNING_INACTIVE_MINUTES = "event_morning_inactive_minutes";
+    public static final String KEY_AFTERNOON_INACTIVE_MINUTES = "event_afternoon_inactive_minutes";
     public static final String DEFAULT_USER_NAME = "宝宝";
     public static final String DEFAULT_COMPANION_NAME = "陪伴者";
     // 仅用于从旧公开版平滑迁移，新的 UI 和业务逻辑不再写入这两个键。
@@ -90,6 +97,42 @@ public class AppPrefs {
         if (saved < MIN_POLL_INTERVAL_MS) return DEFAULT_POLL_INTERVAL_MS;
         if (saved > MAX_POLL_INTERVAL_MS) return MAX_POLL_INTERVAL_MS;
         return saved;
+    }
+
+    public static long foregroundStableMs(Context ctx) {
+        int seconds = clamp(get(ctx).getInt(KEY_FOREGROUND_STABLE_SECONDS, EventPolicyConfig.FOREGROUND_STABLE_SECONDS),
+                EventPolicyConfig.FOREGROUND_STABLE_SECONDS_MIN, EventPolicyConfig.FOREGROUND_STABLE_SECONDS_MAX);
+        return seconds * 1000L;
+    }
+
+    public static long foregroundMergeMs(Context ctx) {
+        return EventPolicyConfig.minutes(clamp(get(ctx).getInt(KEY_FOREGROUND_MERGE_MINUTES,
+                EventPolicyConfig.FOREGROUND_MERGE_MINUTES), 1, 30));
+    }
+
+    public static long globalCandidateCooldownMs(Context ctx) {
+        return EventPolicyConfig.minutes(clamp(get(ctx).getInt(KEY_GLOBAL_CANDIDATE_COOLDOWN_MINUTES,
+                EventPolicyConfig.GLOBAL_COOLDOWN_MINUTES), 0, 180));
+    }
+
+    public static long longAppSessionMs(Context ctx) {
+        return EventPolicyConfig.minutes(clamp(get(ctx).getInt(KEY_LONG_APP_SESSION_MINUTES,
+                EventPolicyConfig.LONG_APP_SESSION_MINUTES), 10, 360));
+    }
+
+    public static long shoppingMinimumMs(Context ctx) {
+        return EventPolicyConfig.minutes(clamp(get(ctx).getInt(KEY_SHOPPING_MIN_MINUTES,
+                EventPolicyConfig.SHOPPING_MIN_MINUTES), 1, 30));
+    }
+
+    public static long morningInactiveMs(Context ctx) {
+        return EventPolicyConfig.minutes(clamp(get(ctx).getInt(KEY_MORNING_INACTIVE_MINUTES,
+                EventPolicyConfig.MORNING_INACTIVE_MINUTES), 60, 720));
+    }
+
+    public static long afternoonInactiveMs(Context ctx) {
+        return EventPolicyConfig.minutes(clamp(get(ctx).getInt(KEY_AFTERNOON_INACTIVE_MINUTES,
+                EventPolicyConfig.AFTERNOON_INACTIVE_MINUTES), 30, 360));
     }
 
     /** 把旧公开版称呼和回家模式观察列表迁移到通用模板配置。 */
@@ -354,4 +397,6 @@ public class AppPrefs {
         String s = value.trim();
         return s.matches("[A-Za-z][A-Za-z0-9_]*(\\.[A-Za-z0-9_]+)+");
     }
+
+    private static int clamp(int value, int min, int max) { return Math.max(min, Math.min(max, value)); }
 }

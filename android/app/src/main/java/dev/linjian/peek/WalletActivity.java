@@ -2,11 +2,15 @@ package dev.linjian.peek;
 
 import android.app.Activity;
 import android.app.AlertDialog;
+import android.content.BroadcastReceiver;
+import android.content.Context;
 import android.content.Intent;
+import android.content.IntentFilter;
 import android.graphics.Color;
 import android.graphics.Typeface;
 import android.graphics.drawable.ColorDrawable;
 import android.graphics.drawable.GradientDrawable;
+import android.os.Build;
 import android.os.Bundle;
 import android.text.InputType;
 import android.view.Gravity;
@@ -36,6 +40,9 @@ public class WalletActivity extends Activity {
     private boolean companionApprovalsOpen = true;
     private UITheme theme;
     private int bg, ink, sub, primary, primarySoft, cardColor, cardSoft, cardStroke;
+    private final BroadcastReceiver walletUpdatedReceiver = new BroadcastReceiver() {
+        @Override public void onReceive(Context context, Intent intent) { refreshCurrentPage(); }
+    };
 
     @Override protected void onCreate(Bundle b) {
         super.onCreate(b);
@@ -46,17 +53,31 @@ public class WalletActivity extends Activity {
 
     @Override protected void onResume() {
         super.onResume();
+        try {
+            IntentFilter filter = new IntentFilter("dev.linjian.peek.WALLET_UPDATED");
+            if (Build.VERSION.SDK_INT >= 33) registerReceiver(walletUpdatedReceiver, filter, Context.RECEIVER_NOT_EXPORTED);
+            else registerReceiver(walletUpdatedReceiver, filter);
+        } catch (Exception ignored) { }
         UITheme latest = UITheme.current(this);
         if (theme == null || !theme.name.equals(latest.name)) {
             loadTheme();
             buildRoot();
-            if (selectedMonth == null || selectedMonth.length() == 0) selectedMonth = WalletState.currentMonth();
-            if ("rules".equals(page)) showRules();
-            else if ("stats".equals(page)) showStats();
-            else if ("pending".equals(page)) showPending();
-            else if ("add".equals(page)) showAdd("expense");
-            else showHome();
         }
+        if (selectedMonth == null || selectedMonth.length() == 0) selectedMonth = WalletState.currentMonth();
+        refreshCurrentPage();
+    }
+
+    @Override protected void onPause() {
+        try { unregisterReceiver(walletUpdatedReceiver); } catch (Exception ignored) { }
+        super.onPause();
+    }
+
+    private void refreshCurrentPage() {
+        if ("rules".equals(page)) showRules();
+        else if ("stats".equals(page)) showStats();
+        else if ("pending".equals(page)) showPending();
+        else if ("add".equals(page)) showAdd("expense");
+        else showHome();
     }
 
     private void loadTheme() {

@@ -64,7 +64,7 @@ public class CompanionService extends Service {
             DebugState.append(this, "服务启动失败：服务器地址或 Token 为空");
             stopSelf(); return START_NOT_STICKY;
         }
-        DebugState.append(this, "掌心窗公开版 v0.3.8.9 服务已启动，目标：" + serverUrl);
+        DebugState.append(this, "掌心窗公开版 v0.3.9.0 服务已启动，目标：" + serverUrl);
         if (!running) { running = true; startPolling(); } else DebugState.append(this, "服务已在运行，继续轮询");
         return START_STICKY;
     }
@@ -224,7 +224,7 @@ public class CompanionService extends Service {
                 boolean ok = rr.optBoolean("ok", false);
                 String result = rr.optString("result", rr.toString());
                 DebugState.append(ctx, "执行小金库命令 " + action + "：" + result);
-                try { reportCommand(ctx, serverUrl, token, id, ok, result); uploadStateThrottled(serverUrl, token, ctx, true); } catch (Exception ignored) { }
+                try { reportCommand(ctx, serverUrl, token, id, ok, result); notifyWalletUpdated(ctx); uploadStateThrottled(serverUrl, token, ctx, true); } catch (Exception ignored) { }
                 return;
             }
             if (isTakeoutAction(action)) {
@@ -527,6 +527,14 @@ public class CompanionService extends Service {
             ctx.startActivity(i);
             return true;
         } catch (Exception e) { DebugState.append(ctx, "远程闹钟异常：" + ScreenshotService.shortMsg(e)); return false; }
+    }
+
+    private static void notifyWalletUpdated(Context ctx) {
+        try {
+            Intent i = new Intent("dev.linjian.peek.WALLET_UPDATED");
+            i.setPackage(ctx.getPackageName());
+            ctx.sendBroadcast(i);
+        } catch (Exception ignored) { }
     }
 
     private static void uploadStateThrottled(String serverUrl, String token, Context ctx, boolean force) throws Exception {

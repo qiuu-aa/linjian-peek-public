@@ -52,7 +52,13 @@ class SlackEventForwardingTests(unittest.TestCase):
             "app_name": "Chrome",
             "package_name": "com.android.chrome",
             "action": "foreground_changed",
-            "metadata_json": {"previous_package": "com.bbk.launcher2"},
+            "metadata_json": {
+                "aggregated": True,
+                "from_package": "com.tencent.mm",
+                "to_package": "com.android.chrome",
+                "transition_count": 2,
+                "window_seconds": 300,
+            },
         }
 
     @staticmethod
@@ -97,10 +103,37 @@ class SlackEventForwardingTests(unittest.TestCase):
             "action=foreground_changed\n"
             "app=Chrome\n"
             "package=com.android.chrome\n"
-            "previous_package=com.bbk.launcher2\n"
+            "previous_package=\n"
+            "from_package=com.tencent.mm\n"
+            "to_package=com.android.chrome\n"
+            "transition_count=2\n"
+            "window_seconds=300\n"
             "occurred_at=2026-09-27T08:17:50Z\n"
             "event_id=05392753-test-event",
         )
+
+    def test_noise_is_not_forwarded_when_state_is_called_directly(self):
+        noisy = self.phone_event()
+        noisy["metadata_json"] = {"aggregated": False}
+        chatgpt = self.phone_event()
+        chatgpt.update({"id": "chatgpt-event", "package_name": "com.openai.chatgpt"})
+
+        with tempfile.TemporaryDirectory() as data_dir, \
+                patch.dict(os.environ, {
+                    "LINJIAN_DATA_DIR": data_dir,
+                    "SLACK_USER_TOKEN": "xoxp-test-token",
+                    "SLACK_CHANNEL_ID": "C0C4U2ZGBDX",
+                    "SLACK_EVENT_DEBOUNCE_SECONDS": "0",
+                    "SLACK_EVENT_MIN_INTERVAL_SECONDS": "0",
+                }), \
+                patch.object(linjian_server, "Thread", ImmediateThread), \
+                patch.object(linjian_server, "urlopen") as mocked_urlopen, \
+                patch.object(linjian_server.sys, "stderr", Mock()):
+            state = linjian_server.State()
+            state.add_activity_event(noisy)
+            state.add_activity_event(chatgpt)
+
+        mocked_urlopen.assert_not_called()
 
     def test_bot_token_is_used_when_user_token_is_missing(self):
         response = self.slack_response()

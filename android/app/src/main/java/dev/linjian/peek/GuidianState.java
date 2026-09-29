@@ -17,6 +17,7 @@ import java.text.SimpleDateFormat;
 import java.util.Calendar;
 import java.util.Date;
 import java.util.Locale;
+import java.util.UUID;
 
 /** 掌心窗 · 归电：只存连接状态，不读取聊天内容。 */
 public class GuidianState {
@@ -47,6 +48,8 @@ public class GuidianState {
     public static final String KEY_LAST_DUE_AT = "guidian_last_due_at";
     public static final String KEY_DUE_BUT_NOT_SHOWN = "guidian_due_but_not_shown";
     public static final String KEY_LAST_AUTO_PROMPT_RESULT = "guidian_last_auto_prompt_result";
+    public static final String KEY_ACTIVE_ACTION_ID = "guidian_active_action_id_v2";
+    public static final String KEY_ACTIVE_ACTION_AT = "guidian_active_action_at_v2";
 
     private static final String CHANNEL_ID = "linjian_guidian_call";
     private static final int NOTIFICATION_ID = 2026072301;
@@ -167,14 +170,20 @@ public class GuidianState {
     }
 
     public static void markReturned(Context ctx, String source) {
+        markReturned(ctx, source, "");
+    }
+
+    public static void markReturned(Context ctx, String source, String correlationId) {
         long now = System.currentTimeMillis();
+        String actionId = guidianActionId(ctx, correlationId, now);
         prefs(ctx).edit()
                 .putLong(KEY_LAST_RETURN_AT, now)
                 .putString(KEY_LAST_RETURN_SOURCE, source == null ? "unknown" : source)
                 .apply();
         DebugState.append(ctx, "归电已记录回来：" + (source == null ? "unknown" : source));
         if (!"target_foreground".equals(source))
-            ActivityEventStore.recordPhone(ctx, "guidian_return", "回应归电", source == null ? "" : source);
+            ActivityEventStore.recordPhoneAction(ctx, "guidian_return", "回应归电", source == null ? "" : source,
+                    "explicit_guidian_response", "guidian_returned", actionId, true);
     }
 
     public static void reject(Context ctx, String reason) {
@@ -184,7 +193,8 @@ public class GuidianState {
                 .putString(KEY_LAST_REJECT_REASON, reason == null ? "" : reason.trim())
                 .apply();
         DebugState.append(ctx, "归电已拒绝：" + (reason == null ? "" : reason.trim()));
-        ActivityEventStore.recordPhone(ctx, "guidian_reject", "稍后回应归电", reason == null ? "" : reason.trim());
+        ActivityEventStore.recordPhoneAction(ctx, "guidian_reject", "稍后回应归电", reason == null ? "" : reason.trim(),
+                "explicit_rejection_reason", "guidian_rejected", guidianActionId(ctx, "", now), true);
     }
 
     public static void evaluate(Context ctx, JSONObject state) {
@@ -251,6 +261,8 @@ public class GuidianState {
                     .putInt(KEY_TODAY_COUNT, count)
                     .putLong(KEY_LAST_PROMPT_AT, System.currentTimeMillis())
                     .putString(KEY_LAST_PROMPT_TEXT, prompt)
+                    .putString(KEY_ACTIVE_ACTION_ID, UUID.randomUUID().toString())
+                    .putLong(KEY_ACTIVE_ACTION_AT, System.currentTimeMillis())
                     .apply();
             Intent i = new Intent(ctx, GuidianActivity.class);
             i.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_CLEAR_TOP | Intent.FLAG_ACTIVITY_SINGLE_TOP);
@@ -270,7 +282,13 @@ public class GuidianState {
         try {
             String action = cmd.optString("action", "get_guidian_state");
             if ("get_guidian_state".equals(action)) return config(ctx).put("ok", true);
-            if ("mark_guidian_returned".equals(action)) { markReturned(ctx, cmd.optString("source", "mcp")); return config(ctx).put("ok", true); }
+            if ("mark_guidian_returned".equals(action)) {
+                JSONObject payload = cmd.optJSONObject("payload");
+                String correlationId = cmd.optString("correlation_id", cmd.optString("action_id", ""));
+                if (correlationId.isEmpty() && payload != null) correlationId = payload.optString("correlation_id", payload.optString("action_id", ""));
+                markReturned(ctx, cmd.optString("source", "mcp"), correlationId);
+                return config(ctx).put("ok", true);
+            }
             if ("trigger_guidian".equals(action)) return showPrompt(ctx, true);
             if ("set_guidian_config".equals(action)) {
                 if (!prefs(ctx).getBoolean(KEY_ALLOW_REMOTE, true)) return out.put("ok", false).put("error", "remote_config_disabled");
@@ -301,6 +319,17 @@ public class GuidianState {
         long lastReturn = p.getLong(KEY_LAST_RETURN_AT, now);
         long lastPrompt = p.getLong(KEY_LAST_PROMPT_AT, 0);
         return Math.max(lastReturn + intervalMin(ctx) * 60000L, lastPrompt + cooldownMin(ctx) * 60000L);
+    }
+
+    private static String guidianActionId(Context ctx, String supplied, long now) {
+        if (supplied != null && !supplied.trim().isEmpty()) return supplied.trim();
+        SharedPreferences p = prefs(ctx);
+        String active = p.getString(KEY_ACTIVE_ACTION_ID, "");
+        long activeAt = p.getLong(KEY_ACTIVE_ACTION_AT, 0);
+        if (!active.isEmpty() && now - activeAt <= 30 * 60_000L) return active;
+        String fallback = "guidian-" + (now / EventPolicyConfig.GUIDIAN_DEDUPE_MS);
+        p.edit().putString(KEY_ACTIVE_ACTION_ID, fallback).putLong(KEY_ACTIVE_ACTION_AT, now).apply();
+        return fallback;
     }
 
     private static void recordAutoCheck(Context ctx, long checkedAt, long dueAt, boolean dueButNotShown, String reason, String result) {

@@ -1,6 +1,6 @@
-# v0.3.8.9 MCP 兼容与日记批注读取修复
+# v0.3.9.0 MCP 兼容与日记批注读取修复
 
-本补丁在 `linjian-peek-public-v0.3.8.9-media-state-fix` 基础上修复两个反馈问题：
+本补丁在 `linjian-peek-public-v0.3.9.0-media-state-fix` 基础上修复两个反馈问题：
 
 ## 1. AI 平台连接 MCP 时 `ovoActivityCards` 报 Invalid input
 
@@ -28,4 +28,4 @@ Render server 的命令白名单遗漏了日记批注相关 action，导致 MCP 
 
 - 需要重新部署 MCP 服务，以修复 `ovoActivityCards` 连接兼容问题。
 - 需要重新部署 server 服务，以修复日记批注读取返回 noop。
-- 手机 App 端 v0.3.8.9 已有批注 handler，本次主要修 server / mcp 两侧。
+- 手机 App 端 v0.3.9.0 已有批注 handler，本次主要修 server / mcp 两侧。
