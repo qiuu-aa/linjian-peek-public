@@ -165,7 +165,7 @@ public class MainActivity extends Activity {
         if (setCurrentWeatherButton != null) setCurrentWeatherButton.setOnClickListener(v -> addWeatherLocation(true));
         if (checkUpdateButton != null) checkUpdateButton.setOnClickListener(v -> checkForUpdates(true));
         if (downloadUpdateButton != null) downloadUpdateButton.setOnClickListener(v -> downloadLatestApk());
-        if (testGuidianButton != null) testGuidianButton.setOnClickListener(v -> { saveSettings(); GuidianState.showPrompt(this, true); CompanionWindowState.recordJourney(this, "回应归电", "回到" + AppPrefs.companionName(this) + "的窗边"); updateUI(); });
+        if (testGuidianButton != null) testGuidianButton.setOnClickListener(v -> { saveSettings(); GuidianState.showPrompt(this, true); CompanionWindowState.recordJourney(this, "打开提醒测试", "查看提醒界面"); updateUI(); });
         if (saveCalendarEventButton != null) saveCalendarEventButton.setOnClickListener(v -> saveCalendarEvent());
         if (saveGuidianSettingsButton != null) saveGuidianSettingsButton.setOnClickListener(v -> { saveSettings(); Toast.makeText(this, "归电设置已保存", Toast.LENGTH_SHORT).show(); updateUI(); });
         if (chooseGuidianAvatarButton != null) chooseGuidianAvatarButton.setOnClickListener(v -> chooseGuidianAvatar());

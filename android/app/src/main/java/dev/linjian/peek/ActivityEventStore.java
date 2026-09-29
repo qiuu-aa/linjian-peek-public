@@ -14,12 +14,16 @@ import java.nio.charset.StandardCharsets;
 import java.text.SimpleDateFormat;
 import java.util.Date;
 import java.util.Locale;
+import java.util.TimeZone;
 import java.util.UUID;
 
 /** Unified, bounded activity event store. Local writes never depend on network availability. */
 public final class ActivityEventStore {
     private static final String KEY_EVENTS = "activity_events_v1";
-    private static final String KEY_LAST_PACKAGE = "activity_last_foreground_package_v1";
+    private static final String KEY_LAST_OBSERVED_PACKAGE = "activity_last_observed_package_v2";
+    private static final String KEY_LAST_GLOBAL_EMIT = "event_last_global_emit_at_v2";
+    private static final String KEY_LAST_TYPE_PREFIX = "event_last_type_emit_at_v2_";
+    private static final String KEY_LAST_CORRELATION_PREFIX = "event_last_correlation_at_v2_";
     private static final int MAX_EVENTS = 500;
 
     private ActivityEventStore() { }
@@ -42,33 +46,122 @@ public final class ActivityEventStore {
     }
 
     public static void recordForegroundChange(Context ctx, String packageName) {
+        ForegroundEventCoordinator.onForegroundPackage(ctx, packageName);
+    }
+
+    /** Raw package trajectory is local-only, including system/helper surfaces. */
+    public static void recordForegroundTrace(Context ctx, String packageName, PackageClassifier.Category category) {
         if (!AppPrefs.get(ctx).getBoolean(AppPrefs.KEY_JOURNEY_ENABLED, true)) return;
         String pkg = packageName == null ? "" : packageName.trim();
-        if (pkg.isEmpty() || pkg.equals("com.android.systemui") || pkg.contains("inputmethod")) return;
+        if (pkg.isEmpty()) return;
         SharedPreferences p = AppPrefs.get(ctx);
-        String previous = p.getString(KEY_LAST_PACKAGE, "");
+        String previous = p.getString(KEY_LAST_OBSERVED_PACKAGE, "");
         if (pkg.equals(previous)) return;
-        p.edit().putString(KEY_LAST_PACKAGE, pkg).apply();
+        p.edit().putString(KEY_LAST_OBSERVED_PACKAGE, pkg).apply();
         String app = appLabel(ctx, pkg);
         String previousLabel = previous.isEmpty() ? "" : appLabel(ctx, previous);
         String subtitle = previousLabel.isEmpty() ? "" : "离开 " + previousLabel;
         try {
             add(ctx, new JSONObject().put("source", "phone").put("type", "app_open")
                     .put("title", titleForPackage(ctx, pkg, app)).put("subtitle", subtitle)
-                    .put("app_name", app).put("package_name", pkg).put("action", "foreground_changed")
-                    .put("status", "completed").put("metadata_json", new JSONObject().put("previous_package", previous)), true);
+                    .put("app_name", app).put("package_name", pkg).put("action", "foreground_observed_local")
+                    .put("status", "completed").put("metadata_json", new JSONObject()
+                            .put("previous_package", previous).put("package_category", category.name().toLowerCase(Locale.US))
+                            .put("local_only", true)), false);
         } catch (Exception ignored) { }
     }
 
     public static void recordPhone(Context ctx, String type, String title, String subtitle) {
+        String value = type == null ? "" : type.trim();
+        String action = "phone_activity".equals(value) ? "" : value;
+        recordPhoneAction(ctx, value, title, subtitle, action, action, "", isHighPriorityType(value));
+    }
+
+    public static void recordPhoneAction(Context ctx, String type, String title, String subtitle,
+                                         String subtype, String action, String correlationId, boolean bypassCooldown) {
         if (!AppPrefs.get(ctx).getBoolean(AppPrefs.KEY_JOURNEY_ENABLED, true)) return;
-        try { add(ctx, new JSONObject().put("source", "phone").put("type", type).put("title", title).put("subtitle", subtitle).put("status", "completed"), true); }
-        catch (Exception ignored) { }
+        try {
+            if (correlationId != null && !correlationId.trim().isEmpty()
+                    && wasCorrelationEmitted(ctx, type, correlationId, System.currentTimeMillis())) {
+                logRule(ctx, "merged_repeat_switches", type, "correlation=" + clean(correlationId, 100));
+                return;
+            }
+            JSONObject metadata = new JSONObject();
+            if (subtype != null && !subtype.trim().isEmpty()) metadata.put("subtype", clean(subtype, 80));
+            if (correlationId != null && !correlationId.trim().isEmpty()) metadata.put("correlation_id", clean(correlationId, 100));
+            JSONObject event = new JSONObject().put("source", "phone").put("type", type)
+                    .put("title", title).put("subtitle", subtitle).put("action", action)
+                    .put("status", "completed").put("metadata_json", metadata);
+            if ("phone_activity".equals(type) && (subtype == null || subtype.trim().isEmpty())
+                    && (action == null || action.trim().isEmpty())) {
+                add(ctx, event, false);
+                logRule(ctx, "suppressed_unknown_phone_activity", type, "");
+                return;
+            }
+            if (!emitCandidate(ctx, event, bypassCooldown)) add(ctx, event, false);
+        } catch (Exception ignored) { }
+    }
+
+    /** Upload boundary: only candidate events reach /api/activity/events. */
+    public static synchronized boolean emitCandidate(Context ctx, JSONObject input, boolean bypassCooldown) {
+        long now = System.currentTimeMillis();
+        String type = clean(input.optString("type", "activity"), 40);
+        JSONObject metadata = input.optJSONObject("metadata_json");
+        if (metadata == null) metadata = new JSONObject();
+        String correlation = clean(metadata.optString("correlation_id", ""), 100);
+        SharedPreferences p = AppPrefs.get(ctx);
+        if (!correlation.isEmpty()) {
+            String key = KEY_LAST_CORRELATION_PREFIX + safeKey(correlation);
+            long last = p.getLong(key, 0);
+            long dedupeMs = type.startsWith("guidian_") ? EventPolicyConfig.GUIDIAN_DEDUPE_MS : EventPolicyConfig.EDIT_DEDUPE_MS;
+            if (now - last < dedupeMs) {
+                logRule(ctx, "merged_repeat_switches", type, "correlation=" + correlation);
+                return false;
+            }
+        }
+        long typeCooldown = typeCooldownMs(type);
+        long lastType = p.getLong(KEY_LAST_TYPE_PREFIX + safeKey(type), 0);
+        if (!bypassCooldown && now - lastType < typeCooldown) {
+            logRule(ctx, "suppressed_cooldown", type, "type");
+            return false;
+        }
+        long lastGlobal = p.getLong(KEY_LAST_GLOBAL_EMIT, 0);
+        if (!bypassCooldown && now - lastGlobal < AppPrefs.globalCandidateCooldownMs(ctx)) {
+            logRule(ctx, "suppressed_cooldown", type, "global");
+            return false;
+        }
+        try {
+            metadata.put("candidate", true).put("timezone", EventPolicyConfig.TIME_ZONE);
+            input.put("metadata_json", metadata);
+        } catch (Exception ignored) { }
+        add(ctx, input, true);
+        SharedPreferences.Editor edit = p.edit().putLong(KEY_LAST_TYPE_PREFIX + safeKey(type), now);
+        if (!bypassCooldown) edit.putLong(KEY_LAST_GLOBAL_EMIT, now);
+        if (!correlation.isEmpty()) edit.putLong(KEY_LAST_CORRELATION_PREFIX + safeKey(correlation), now);
+        edit.apply();
+        logRule(ctx, "emitted_candidate", type, input.optString("package_name", ""));
+        return true;
+    }
+
+    public static void recordThresholdMetric(Context ctx, String metric, double previous, double current, double[] thresholds) {
+        if (thresholds == null) return;
+        for (double threshold : thresholds) {
+            if ((previous < threshold && current >= threshold) || (previous > threshold && current <= threshold)) {
+                try {
+                    emitCandidate(ctx, new JSONObject().put("source", "phone").put("type", "metric_threshold_candidate")
+                            .put("title", "数值跨越阈值").put("action", clean(metric, 80))
+                            .put("status", "completed").put("metadata_json", new JSONObject()
+                                    .put("metric", clean(metric, 80)).put("threshold", threshold)
+                                    .put("direction", current >= threshold ? "up" : "down")), false);
+                } catch (Exception ignored) { }
+                return;
+            }
+        }
     }
 
     public static JSONArray list(Context ctx, String source, int limit, boolean todayOnly) {
         JSONArray out = new JSONArray();
-        String today = new SimpleDateFormat("yyyy-MM-dd", Locale.getDefault()).format(new Date());
+        String today = formatShanghai("yyyy-MM-dd", new Date());
         try {
             JSONArray all = new JSONArray(AppPrefs.get(ctx).getString(KEY_EVENTS, "[]"));
             for (int i = 0; i < all.length() && out.length() < Math.max(1, limit); i++) {
@@ -92,7 +185,7 @@ public final class ActivityEventStore {
 
     private static JSONArray listCategory(Context ctx, int limit, boolean todayOnly, boolean phoneCategory) {
         JSONArray out = new JSONArray();
-        String today = new SimpleDateFormat("yyyy-MM-dd", Locale.getDefault()).format(new Date());
+        String today = formatShanghai("yyyy-MM-dd", new Date());
         try {
             JSONArray all = new JSONArray(AppPrefs.get(ctx).getString(KEY_EVENTS, "[]"));
             for (int i = 0; i < all.length() && out.length() < limit; i++) {
@@ -138,8 +231,8 @@ public final class ActivityEventStore {
             e.put("device_id", clean(input.optString("device_id", AppPrefs.device(ctx)), 80));
             e.put("created_at", clean(input.optString("created_at", isoNow()), 40));
             e.put("created_at_ms", input.optLong("created_at_ms", now));
-            e.put("local_date", new SimpleDateFormat("yyyy-MM-dd", Locale.getDefault()).format(new Date(now)));
-            e.put("local_time", new SimpleDateFormat("HH:mm", Locale.getDefault()).format(new Date(now)));
+            e.put("local_date", formatShanghai("yyyy-MM-dd", new Date(now)));
+            e.put("local_time", formatShanghai("HH:mm", new Date(now)));
             for (String key : new String[]{"source", "type", "title", "subtitle", "app_name", "package_name", "action", "status"})
                 e.put(key, clean(input.optString(key, key.equals("source") ? "phone" : (key.equals("status") ? "completed" : "")), key.equals("subtitle") ? 220 : 120));
             Object metadata = input.opt("metadata_json");
@@ -173,10 +266,32 @@ public final class ActivityEventStore {
     private static void hydrateLocalTime(JSONObject e) {
         if (e == null || e.has("local_date")) return;
         long ms = timeOf(e); if (ms <= 0) ms = System.currentTimeMillis();
-        try { e.put("created_at_ms", ms); e.put("local_date", new SimpleDateFormat("yyyy-MM-dd", Locale.getDefault()).format(new Date(ms))); e.put("local_time", new SimpleDateFormat("HH:mm", Locale.getDefault()).format(new Date(ms))); }
+        try { e.put("created_at_ms", ms); e.put("local_date", formatShanghai("yyyy-MM-dd", new Date(ms))); e.put("local_time", formatShanghai("HH:mm", new Date(ms))); }
         catch (Exception ignored) { }
     }
     private static long timeOf(JSONObject e) { long ms = e.optLong("created_at_ms", 0); if (ms > 0) return ms; try { SimpleDateFormat f = new SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss'Z'", Locale.US); f.setTimeZone(java.util.TimeZone.getTimeZone("UTC")); Date d = f.parse(e.optString("created_at")); return d == null ? 0 : d.getTime(); } catch (Exception ignored) { return 0; } }
     private static String isoNow() { SimpleDateFormat f = new SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss'Z'", Locale.US); f.setTimeZone(java.util.TimeZone.getTimeZone("UTC")); return f.format(new Date()); }
     private static String clean(String s, int max) { String v = s == null ? "" : s.trim(); return v.length() <= max ? v : v.substring(0, max); }
+    private static String formatShanghai(String pattern, Date date) { SimpleDateFormat f = new SimpleDateFormat(pattern, Locale.CHINA); f.setTimeZone(TimeZone.getTimeZone(EventPolicyConfig.TIME_ZONE)); return f.format(date); }
+    private static String safeKey(String value) { return value == null ? "" : value.replaceAll("[^A-Za-z0-9_.-]", "_"); }
+    private static boolean isHighPriorityType(String type) { return "guidian_reject".equals(type) || "screen_break_trigger".equals(type) || "user_request".equals(type) || "user_message".equals(type) || "action_error".equals(type); }
+    private static boolean wasCorrelationEmitted(Context ctx, String type, String correlation, long now) {
+        long last = AppPrefs.get(ctx).getLong(KEY_LAST_CORRELATION_PREFIX + safeKey(clean(correlation, 100)), 0);
+        long dedupeMs = type != null && type.startsWith("guidian_") ? EventPolicyConfig.GUIDIAN_DEDUPE_MS : EventPolicyConfig.EDIT_DEDUPE_MS;
+        return last > 0 && now - last < dedupeMs;
+    }
+    private static long typeCooldownMs(String type) {
+        if ("late_night_active_candidate".equals(type)) return EventPolicyConfig.LATE_NIGHT_TYPE_COOLDOWN_MS;
+        if ("long_app_session_candidate".equals(type)) return EventPolicyConfig.LONG_SESSION_TYPE_COOLDOWN_MS;
+        if ("shopping_or_takeout_candidate".equals(type)) return EventPolicyConfig.SHOPPING_TYPE_COOLDOWN_MS;
+        if ("morning_return_candidate".equals(type) || "afternoon_return_candidate".equals(type)) return EventPolicyConfig.RETURN_TYPE_COOLDOWN_MS;
+        if ("meal_window_candidate".equals(type)) return EventPolicyConfig.MEAL_TYPE_COOLDOWN_MS;
+        if ("app_open".equals(type)) return EventPolicyConfig.FOREGROUND_TYPE_COOLDOWN_MS;
+        if ("whisper_update".equals(type) || "calendar_edit".equals(type)) return EventPolicyConfig.EDIT_DEDUPE_MS;
+        return EventPolicyConfig.FOREGROUND_TYPE_COOLDOWN_MS;
+    }
+    static void logRule(Context ctx, String rule, String type, String detail) {
+        String safeDetail = clean(detail, 100);
+        DebugState.append(ctx, "event_policy rule=" + rule + " type=" + clean(type, 60) + (safeDetail.isEmpty() ? "" : " detail=" + safeDetail));
+    }
 }

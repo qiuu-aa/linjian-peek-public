@@ -36,7 +36,7 @@ async function handle(request, env) {
   const path = url.pathname;
   if (request.method === "OPTIONS") return corsResponse();
   if (path === "/" || path === "/health") {
-    return json({ ok: true, service: "linjian-cloudflare-worker", name: "掌心窗", version: VERSION, tools: Array.from(ALLOWED_ACTIONS).sort(), mcp: { endpoint: "/mcp", tools: MCP_TOOLS.map(t => t.name) }, cloudflare_lite: false, cloudflare_full_tools: true });
+    return json({ ok: true, service: "linjian-cloudflare-worker", name: "掌心窗", version: VERSION, tools: Array.from(ALLOWED_ACTIONS).sort(), mcp: { endpoint: "/mcp", tools: MCP_TOOLS.map(t => t.name) }, cloudflare_lite: false, cloudflare_full_tools: true, event_admission_policy: "candidate-v2" });
   }
   if (path === "/mcp") return handleMcp(request, env, url);
   // MCP UI iframe 不会携带 LINJIAN_TOKEN，因此给表情包展示卡开放一个只读、短期缓存的最新展示接口。
@@ -1577,7 +1577,57 @@ async function upsertActivity(env, data) {
     .bind(entry.id, entry.device_id, entry.created_at, entry.source, entry.type, entry.title, entry.subtitle, entry.app_name, entry.package_name, entry.action, entry.status, entry.metadata_json).run();
   return entry;
 }
-async function saveActivityEvent(env, data) { return json({ ok: true, event: await upsertActivity(env, data || {}) }); }
+function eventMetadata(data) {
+  const value = data?.metadata_json ?? data?.metadata ?? {};
+  if (typeof value === "string") { try { return JSON.parse(value); } catch (_) { return {}; } }
+  return value && typeof value === "object" && !Array.isArray(value) ? value : {};
+}
+function packageAdmissionRule(packageName) {
+  const pkg = String(packageName || "").trim().toLowerCase();
+  const exact = new Set(["android", "com.android.systemui", "com.android.launcher", "com.android.launcher2", "com.android.launcher3", "com.google.android.apps.nexuslauncher", "com.miui.home", "com.huawei.android.launcher", "com.sec.android.app.launcher", "com.android.intentresolver", "com.android.resolver", "com.android.documentsui", "com.google.android.documentsui", "com.android.permissioncontroller", "com.google.android.permissioncontroller", "com.android.packageinstaller", "com.google.android.packageinstaller", "com.google.android.photopicker", "com.google.android.apps.photos.picker", "com.android.providers.media", "com.coloros.gallery3d", "com.oplus.gallery", "com.miui.gallery"]);
+  const localOnly = new Set(["com.android.settings", "com.google.android.apps.wellbeing", "com.coloros.digitalwellbeing", "com.oplus.digitalwellbeing", "com.miui.securitycenter", "dev.linjian.peek"]);
+  const parts = ["launcher", "systemui", "keyguard", "fingerprint", "inputmethod", "keyboard", "intentresolver", "permissioncontroller", "packageinstaller", "documentsui", "photopicker", "sharesheet", "recents", ".aod"];
+  if (exact.has(pkg) || parts.some(p => pkg.includes(p))) return (pkg.includes("systemui") || pkg.includes("launcher") || pkg.includes("keyguard")) ? "ignored_system_ui" : "ignored_helper_ui";
+  if (localOnly.has(pkg)) return "ignored_helper_ui";
+  return "";
+}
+function admitActivityEvent(data) {
+  if (String(data?.source || "") !== "phone") return [true, "accepted_non_phone"];
+  const type = String(data?.type || "").trim(); const action = String(data?.action || "").trim();
+  const pkg = String(data?.package_name || data?.package || "").trim().toLowerCase(); const metadata = eventMetadata(data);
+  const ignored = packageAdmissionRule(pkg); if (ignored) return [false, ignored];
+  if (type === "phone_activity" && !action && !String(metadata.subtype || "").trim()) return [false, "suppressed_unknown_phone_activity"];
+  if (type === "app_open") {
+    if (pkg === "com.openai.chatgpt") return [false, "suppressed_chatgpt_open"];
+    if (action !== "foreground_changed" || metadata.aggregated !== true) return [false, "merged_repeat_switches"];
+    return [true, "emitted_candidate"];
+  }
+  const candidates = new Set(["morning_return_candidate", "afternoon_return_candidate", "late_night_active_candidate", "long_app_session_candidate", "shopping_or_takeout_candidate", "travel_candidate", "meal_window_candidate", "metric_threshold_candidate"]);
+  const important = new Set(["guidian_return", "guidian_reject", "screen_break_trigger", "whisper_update", "calendar_edit", "user_request", "user_message", "action_error"]);
+  if (candidates.has(type) || important.has(type)) return [true, "emitted_candidate"];
+  return action ? [true, "emitted_candidate"] : [false, "suppressed_unknown_phone_activity"];
+}
+async function findCorrelatedActivity(env, data) {
+  const correlation = String(eventMetadata(data).correlation_id || "").trim().slice(0, 100);
+  if (!correlation) return null;
+  const deviceId = String(data?.device_id || DEFAULT_DEVICE).slice(0, 80);
+  const type = String(data?.type || "activity").slice(0, 40);
+  const rows = await env.DB.prepare("SELECT * FROM activity_events WHERE device_id=? AND type=? ORDER BY created_at DESC LIMIT 100")
+    .bind(deviceId, type).all();
+  return (rows.results || []).find(row => String(safeJson(row.metadata_json).correlation_id || "").trim() === correlation) || null;
+}
+async function saveActivityEvent(env, data) {
+  const [accepted, rule] = admitActivityEvent(data || {});
+  if (!accepted) { console.log(`[event-policy] rule=${rule} type=${String(data?.type || "").slice(0, 40)} package=${String(data?.package_name || "").slice(0, 120)}`); return json({ ok: true, accepted: false, rule }, 202); }
+  const duplicate = await findCorrelatedActivity(env, data || {});
+  if (duplicate) {
+    console.log(`[event-policy] rule=merged_repeat_switches type=${String(data?.type || "").slice(0, 40)} correlation=duplicate`);
+    return json({ ok: true, accepted: true, duplicate: true, rule: "merged_repeat_switches", event: { ...duplicate, metadata_json: safeJson(duplicate.metadata_json) } });
+  }
+  const event = await upsertActivity(env, data || {});
+  console.log(`[event-policy] rule=emitted_candidate type=${String(data?.type || "").slice(0, 40)} package=${String(data?.package_name || "").slice(0, 120)}`);
+  return json({ ok: true, accepted: true, rule: "emitted_candidate", event });
+}
 async function listActivityEvents(env, url) {
   const deviceId = url.searchParams.get("device_id") || "";
   const source = url.searchParams.get("source") || "";

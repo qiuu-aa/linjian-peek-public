@@ -109,7 +109,15 @@ public final class CompanionWindowState {
     }
 
     public static synchronized void recordJourney(Context ctx, String title, String detail) {
-        ActivityEventStore.recordPhone(ctx, eventType(title), title, detail);
+        String type = eventType(title);
+        String subtype = "";
+        String action = "";
+        boolean bypass = false;
+        if ("whisper_update".equals(type)) { subtype = "explicit_user_message"; action = "content_updated"; bypass = true; }
+        else if ("calendar_edit".equals(type)) { subtype = "important_calendar_edit"; action = "calendar_changed"; bypass = true; }
+        else if ("guidian_return".equals(type)) { subtype = "explicit_guidian_response"; action = "guidian_returned"; bypass = true; }
+        String correlation = action.isEmpty() ? "" : type + ":" + (System.currentTimeMillis() / EventPolicyConfig.EDIT_DEDUPE_MS);
+        ActivityEventStore.recordPhoneAction(ctx, type, title, detail, subtype, action, correlation, bypass);
         try {
             SharedPreferences p = AppPrefs.get(ctx);
             if (!p.getBoolean(AppPrefs.KEY_JOURNEY_ENABLED, true)) return;
@@ -142,9 +150,12 @@ public final class CompanionWindowState {
 
     private static String eventType(String title) {
         String value = title == null ? "" : title;
-        if (value.contains("归电") || value.contains("回来")) return "guidian_return";
+        // Merely opening the prompt/settings is local UI activity. GuidianState emits the
+        // single correlated receipt only when the user actually accepts, rejects or returns.
+        if (value.contains("回应归电") || value.contains("确认回来")) return "guidian_return";
         if (value.contains("门禁") || value.contains("休息")) return "screen_break_trigger";
         if (value.contains("窗语")) return "whisper_update";
+        if (value.contains("日历") || value.contains("相伴日期")) return "calendar_edit";
         return "phone_activity";
     }
 

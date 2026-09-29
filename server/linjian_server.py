@@ -23,6 +23,11 @@ from urllib.error import HTTPError, URLError
 from urllib.parse import parse_qs, quote, unquote, urlparse
 from urllib.request import Request, urlopen
 
+try:
+    from .event_policy import admit_event, correlation_id
+except ImportError:  # Direct `python linjian_server.py` execution.
+    from event_policy import admit_event, correlation_id
+
 DEFAULT_PORT = 8513
 DEFAULT_KEEP = 3
 MAX_UPLOAD_BYTES = 24 * 1024 * 1024
@@ -254,6 +259,14 @@ class State:
                 try: metadata = json.loads(metadata)
                 except Exception: metadata = {"value": clip_text(metadata, 1000)}
             if not isinstance(metadata, (dict, list)): metadata = {}
+            correlation = correlation_id({"metadata_json": metadata})
+            if correlation:
+                duplicate = next((e for e in self.activity_events[:100]
+                    if e.get("device_id") == clip_text(str(data.get("device_id") or DEFAULT_DEVICE), 80)
+                    and e.get("type") == clip_text(str(data.get("type") or "activity"), 40)
+                    and correlation_id(e) == correlation), None)
+                if duplicate is not None:
+                    return dict(duplicate)
             entry = {
                 "id": event_id,
                 "device_id": clip_text(str(data.get("device_id") or DEFAULT_DEVICE), 80),
@@ -449,7 +462,7 @@ class Handler(BaseHTTPRequestHandler):
         path = parsed.path
         qs = parse_qs(parsed.query)
         if path in ("/", "/health"):
-            self._json(200, {"ok": True, "service": "linjian-public", "name": "掌心窗", "version": VERSION, "tools": sorted(ALLOWED_ACTIONS), "guidian": True, "calendar": True, "diary": True, "diary_storage": "phone_local", "app_gate": True, "focus_tools": True, "diary_rename_fix": True, "diary_write_fallback": True, "diary_annotation_tools": True, "diary_annotation_whitelist_fix": True})
+            self._json(200, {"ok": True, "service": "linjian-public", "name": "掌心窗", "version": VERSION, "tools": sorted(ALLOWED_ACTIONS), "guidian": True, "calendar": True, "diary": True, "diary_storage": "phone_local", "app_gate": True, "focus_tools": True, "diary_rename_fix": True, "diary_write_fallback": True, "diary_annotation_tools": True, "diary_annotation_whitelist_fix": True, "event_admission_policy": "candidate-v2"})
             return
         if path in ("/mcp", "/sse"):
             self._json(400, {"ok": False, "error": "LINJIAN_ERR_WRONG_SERVICE", "message": "你访问的是掌心窗 server 服务，不是 MCP 服务。请单独部署 mcp 目录，并在 MCP 客户端填写 MCP 服务域名 + /mcp 或 /sse。"})
@@ -540,8 +553,14 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/api/activity/events":
             if not self._require_token(): return
             data = self._read_json()
+            accepted, rule = admit_event(data)
+            if not accepted:
+                sys.stderr.write(f"[event-policy] rule={rule} type={str(data.get('type') or '')[:40]} package={str(data.get('package_name') or '')[:120]}\n")
+                self._json(202, {"ok": True, "accepted": False, "rule": rule})
+                return
             event = self.state.add_activity_event(data, max(0, min(300, int(data.get("dedupe_seconds") or 0))))
-            self._json(200, {"ok": True, "event": event}); return
+            sys.stderr.write(f"[event-policy] rule=emitted_candidate type={str(data.get('type') or '')[:40]} package={str(data.get('package_name') or '')[:120]}\n")
+            self._json(200, {"ok": True, "accepted": True, "rule": "emitted_candidate", "event": event}); return
         if path == "/api/takeout/resolve_jd_link":
             if not self._require_token(): return
             data = self._read_json()

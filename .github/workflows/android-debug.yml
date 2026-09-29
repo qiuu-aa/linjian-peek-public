@@ -29,6 +29,18 @@ jobs:
         with:
           packages: 'platform-tools platforms;android-34 build-tools;34.0.0'
 
+      - name: Test foreground event policy
+        run: |
+          mkdir -p android/build/policy-tests
+          javac -encoding UTF-8 -source 11 -target 11 \
+            -d android/build/policy-tests \
+            android/app/src/main/java/dev/linjian/peek/ForegroundEventModel.java \
+            android/app/src/main/java/dev/linjian/peek/PackageClassifier.java \
+            android/app/src/main/java/dev/linjian/peek/EventPolicyConfig.java \
+            android/app/src/main/java/dev/linjian/peek/CandidateTimePolicy.java \
+            android/tests/dev/linjian/peek/ForegroundEventModelTest.java
+          java -cp android/build/policy-tests dev.linjian.peek.ForegroundEventModelTest
+
       - name: Build APK
         run: bash android/build.sh
 
