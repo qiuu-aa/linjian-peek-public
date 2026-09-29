@@ -1,8 +1,13 @@
 package dev.linjian.peek;
 
 import android.content.Context;
+import android.content.Intent;
 import android.content.SharedPreferences;
 import android.content.pm.ApplicationInfo;
+import android.content.pm.PackageManager;
+import android.content.pm.ResolveInfo;
+import android.os.Handler;
+import android.os.Looper;
 
 import org.json.JSONArray;
 import org.json.JSONObject;
@@ -21,6 +26,11 @@ public final class ActivityEventStore {
     private static final String KEY_EVENTS = "activity_events_v1";
     private static final String KEY_LAST_PACKAGE = "activity_last_foreground_package_v1";
     private static final int MAX_EVENTS = 500;
+    private static final long FOREGROUND_STABLE_MS = 4000L;
+    private static final Object FOREGROUND_LOCK = new Object();
+    private static final Handler FOREGROUND_HANDLER = new Handler(Looper.getMainLooper());
+    private static String pendingForegroundPackage = "";
+    private static Runnable pendingForegroundCommit;
 
     private ActivityEventStore() { }
 
@@ -43,11 +53,43 @@ public final class ActivityEventStore {
 
     public static void recordForegroundChange(Context ctx, String packageName) {
         if (!AppPrefs.get(ctx).getBoolean(AppPrefs.KEY_JOURNEY_ENABLED, true)) return;
-        String pkg = packageName == null ? "" : packageName.trim();
-        if (pkg.isEmpty() || pkg.equals("com.android.systemui") || pkg.contains("inputmethod")) return;
+        final Context appCtx = ctx.getApplicationContext();
+        final String pkg = packageName == null ? "" : packageName.trim();
+        if (pkg.isEmpty() || isTransientSystemPackage(appCtx, pkg)) return;
+
+        synchronized (FOREGROUND_LOCK) {
+            SharedPreferences p = AppPrefs.get(appCtx);
+            String previous = p.getString(KEY_LAST_PACKAGE, "");
+
+            // Returning to the last stable app before the candidate settles means the
+            // intermediate app was only a transient hop. Drop the whole hop.
+            if (pkg.equals(previous)) {
+                cancelPendingForegroundLocked();
+                return;
+            }
+
+            if (pkg.equals(pendingForegroundPackage)) return;
+            cancelPendingForegroundLocked();
+            pendingForegroundPackage = pkg;
+            pendingForegroundCommit = () -> commitForegroundChange(appCtx, pkg);
+            FOREGROUND_HANDLER.postDelayed(pendingForegroundCommit, FOREGROUND_STABLE_MS);
+        }
+    }
+
+    private static void commitForegroundChange(Context ctx, String pkg) {
+        synchronized (FOREGROUND_LOCK) {
+            if (!pkg.equals(pendingForegroundPackage)) return;
+            pendingForegroundPackage = "";
+            pendingForegroundCommit = null;
+        }
+
+        if (!AppPrefs.get(ctx).getBoolean(AppPrefs.KEY_JOURNEY_ENABLED, true)) return;
+        if (isTransientSystemPackage(ctx, pkg)) return;
+
         SharedPreferences p = AppPrefs.get(ctx);
         String previous = p.getString(KEY_LAST_PACKAGE, "");
         if (pkg.equals(previous)) return;
+
         p.edit().putString(KEY_LAST_PACKAGE, pkg).apply();
         String app = appLabel(ctx, pkg);
         String previousLabel = previous.isEmpty() ? "" : appLabel(ctx, previous);
@@ -58,6 +100,38 @@ public final class ActivityEventStore {
                     .put("app_name", app).put("package_name", pkg).put("action", "foreground_changed")
                     .put("status", "completed").put("metadata_json", new JSONObject().put("previous_package", previous)), true);
         } catch (Exception ignored) { }
+    }
+
+    private static void cancelPendingForegroundLocked() {
+        if (pendingForegroundCommit != null) {
+            FOREGROUND_HANDLER.removeCallbacks(pendingForegroundCommit);
+        }
+        pendingForegroundCommit = null;
+        pendingForegroundPackage = "";
+    }
+
+    private static boolean isTransientSystemPackage(Context ctx, String pkg) {
+        String value = pkg == null ? "" : pkg.trim().toLowerCase(Locale.ROOT);
+        if (value.isEmpty()) return true;
+        if (value.equals("com.android.systemui")
+                || value.contains("inputmethod")
+                || value.contains(".ime")
+                || value.contains("keyboard")) {
+            return true;
+        }
+
+        try {
+            Intent home = new Intent(Intent.ACTION_MAIN);
+            home.addCategory(Intent.CATEGORY_HOME);
+            PackageManager pm = ctx.getPackageManager();
+            for (ResolveInfo info : pm.queryIntentActivities(home, PackageManager.MATCH_DEFAULT_ONLY)) {
+                if (info != null && info.activityInfo != null && pkg.equals(info.activityInfo.packageName)) {
+                    return true;
+                }
+            }
+        } catch (Exception ignored) { }
+
+        return value.contains("launcher");
     }
 
     public static void recordPhone(Context ctx, String type, String title, String subtitle) {
