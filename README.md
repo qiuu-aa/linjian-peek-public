@@ -251,6 +251,26 @@ Blueprint 会自动生成并共享：
    - Streamable HTTP：`https://你的-mcp-域名/mcp`
    - SSE：`https://你的-mcp-域名/sse`
 
+### 可选：把手机活动事件转发到 Slack
+
+如果下游需要把事件识别为用户消息，可给 Slack App 的 **User Token Scopes** 添加 `chat:write`，重新安装应用，并把获得的 User OAuth Token 配置到 server。该消息会以授权用户身份出现，请只在用户明确同意时使用：
+
+```env
+SLACK_USER_TOKEN=xoxp-...
+SLACK_BOT_TOKEN=xoxb-...
+SLACK_CHANNEL_ID=C0123456789
+SLACK_EVENT_DEBOUNCE_SECONDS=45
+SLACK_EVENT_MIN_INTERVAL_SECONDS=120
+```
+
+`SLACK_CHANNEL_ID` 必须是频道 ID（通常以 `C` 开头），不是频道名称。`SLACK_USER_TOKEN` 优先于 `SLACK_BOT_TOKEN`；只使用 Bot Token 时，`xoxb` 属于哪个 Slack App，就要把哪个 App 加入私有频道。所有 Token 都不要提交到仓库。
+
+重新部署 server 后，新写入的 `source=phone` 活动事件会以 `PEEPER_EVENT` 开头的逐行 `key=value` 消息发送到该频道。频繁的 `app_open/foreground_changed` 会等待 45 秒，只发送这一段切换里的最后一次，并与上一条此类消息至少间隔 120 秒；其他手机事件仍立即发送。两个时间都可通过上面的环境变量调整，设为 `0` 可关闭合并和限频。
+
+发送优先级为 `SLACK_USER_TOKEN`、`SLACK_BOT_TOKEN`、`SLACK_WEBHOOK_URL`。前两种方式都需要同时配置 `SLACK_CHANNEL_ID`；API 令牌与频道 ID 未完整配置时才回退到旧版 Incoming Webhook。未配置任何 Slack 变量时不会发起请求；Slack 请求失败也不会影响活动事件保存。相同事件 ID 或服务端去重命中的事件不会重复发送。`zhangxinchuang-mcp` 不需要配置这些变量。
+
+验证 App 切换事件时，在手机上从一个 App 切到另一个 App，停留超过 45 秒，然后在 Slack 中确认出现包含 `type=app_open`、`action=foreground_changed`、当前 `package`、`previous_package`、`occurred_at` 和 `event_id` 的消息。
+
 如果你是从旧版 0.3.6.3 更新上来，**直接重新部署 MCP 服务即可**。新版 MCP 会兼容旧环境变量：即使 `LINJIAN_URL` 仍然是旧版自动写入的 `http://zhangxinchuang-server-xxxx:10000` 内网地址，也会自动兜底转换为 `https://zhangxinchuang-server-xxxx.onrender.com` 公网地址再连接。
 
 如果你重新同步/刷新 Blueprint，新版会自动把 `LINJIAN_URL` 改为引用 server 的公网 `RENDER_EXTERNAL_URL`；如果你只点 **Redeploy**，也可以依靠新版 MCP 的兜底逻辑修复，不需要用户手动复制 URL。

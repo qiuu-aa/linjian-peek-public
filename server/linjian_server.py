@@ -18,7 +18,7 @@ import time
 import uuid
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from threading import Lock
+from threading import Lock, Thread, Timer
 from urllib.error import HTTPError, URLError
 from urllib.parse import parse_qs, quote, unquote, urlparse
 from urllib.request import Request, urlopen
@@ -34,6 +34,10 @@ MAX_UPLOAD_BYTES = 24 * 1024 * 1024
 VERSION = "0.3.9.0"
 DEFAULT_DEVICE = os.environ.get("LINJIAN_DEFAULT_DEVICE", "android-phone")
 ACTIVITY_EVENT_LIMIT = 500
+SLACK_WEBHOOK_TIMEOUT_SECONDS = 5
+SLACK_API_POST_MESSAGE_URL = "https://slack.com/api/chat.postMessage"
+DEFAULT_SLACK_EVENT_DEBOUNCE_SECONDS = 45.0
+DEFAULT_SLACK_EVENT_MIN_INTERVAL_SECONDS = 120.0
 
 ERR_BAD_TOKEN = "LINJIAN_ERR_BAD_TOKEN"
 ERR_NO_IMAGE = "LINJIAN_ERR_NO_IMAGE"
@@ -210,6 +214,88 @@ def activity_type_for_action(action: str) -> str:
     return "command"
 
 
+def _slack_field(value: object) -> str:
+    """Keep the line-oriented event format parseable."""
+    return str(value or "").replace("\r", " ").replace("\n", " ").strip()
+
+
+def slack_event_text(event: dict) -> str:
+    metadata = event.get("metadata_json") or {}
+    if not isinstance(metadata, dict):
+        metadata = {}
+    fields = (
+        ("type", event.get("type")),
+        ("source", event.get("source")),
+        ("action", event.get("action")),
+        ("app", event.get("app_name")),
+        ("package", event.get("package_name")),
+        ("previous_package", metadata.get("previous_package")),
+        ("from_package", metadata.get("from_package")),
+        ("to_package", metadata.get("to_package")),
+        ("transition_count", metadata.get("transition_count")),
+        ("window_seconds", metadata.get("window_seconds")),
+        ("occurred_at", event.get("created_at")),
+        ("event_id", event.get("id")),
+    )
+    return "PEEPER_EVENT\n" + "\n".join(f"{key}={_slack_field(value)}" for key, value in fields)
+
+
+def _read_slack_response(request: Request) -> bytes:
+    with urlopen(request, timeout=SLACK_WEBHOOK_TIMEOUT_SECONDS) as response:
+        # Reading the small response lets urllib finish/close the request cleanly.
+        return response.read(4096)
+
+
+def post_slack_event(
+    event: dict,
+    user_token: str = "",
+    bot_token: str = "",
+    channel_id: str = "",
+    webhook_url: str = "",
+) -> None:
+    text = slack_event_text(event)
+    api_token = user_token or bot_token
+    if api_token and channel_id:
+        payload = json.dumps({"channel": channel_id, "text": text}, ensure_ascii=False).encode("utf-8")
+        request = Request(
+            SLACK_API_POST_MESSAGE_URL,
+            data=payload,
+            headers={
+                "Authorization": f"Bearer {api_token}",
+                "Content-Type": "application/json; charset=utf-8",
+            },
+            method="POST",
+        )
+        raw = _read_slack_response(request)
+        try:
+            result = json.loads(raw.decode("utf-8"))
+        except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+            raise RuntimeError("Slack API returned an invalid response") from exc
+        if not isinstance(result, dict) or not result.get("ok"):
+            error = _slack_field(result.get("error") if isinstance(result, dict) else "unknown_error")
+            raise RuntimeError(f"Slack API rejected the message: {error or 'unknown_error'}")
+        return
+
+    if not webhook_url:
+        raise RuntimeError("Slack forwarding is not configured")
+
+    payload = json.dumps({"text": text}, ensure_ascii=False).encode("utf-8")
+    request = Request(
+        webhook_url,
+        data=payload,
+        headers={"Content-Type": "application/json; charset=utf-8"},
+        method="POST",
+    )
+    _read_slack_response(request)
+
+
+def _nonnegative_env_float(name: str, default: float) -> float:
+    try:
+        return max(0.0, float(os.environ.get(name, default)))
+    except (TypeError, ValueError):
+        return default
+
+
 class State:
     def __init__(self) -> None:
         here = Path(__file__).resolve().parent
@@ -219,6 +305,20 @@ class State:
         self.host = os.environ.get("LINJIAN_HOST", "0.0.0.0")
         self.keep = int(os.environ.get("LINJIAN_KEEP", DEFAULT_KEEP))
         self.hook = os.environ.get("LINJIAN_HOOK", "").strip()
+        self.slack_user_token = os.environ.get("SLACK_USER_TOKEN", "").strip()
+        self.slack_bot_token = os.environ.get("SLACK_BOT_TOKEN", "").strip()
+        self.slack_channel_id = os.environ.get("SLACK_CHANNEL_ID", "").strip()
+        self.slack_webhook_url = os.environ.get("SLACK_WEBHOOK_URL", "").strip()
+        self.slack_event_debounce_seconds = _nonnegative_env_float(
+            "SLACK_EVENT_DEBOUNCE_SECONDS", DEFAULT_SLACK_EVENT_DEBOUNCE_SECONDS
+        )
+        self.slack_event_min_interval_seconds = _nonnegative_env_float(
+            "SLACK_EVENT_MIN_INTERVAL_SECONDS", DEFAULT_SLACK_EVENT_MIN_INTERVAL_SECONDS
+        )
+        self.slack_forward_lock = Lock()
+        self.slack_pending_event: dict | None = None
+        self.slack_forward_timer: Timer | None = None
+        self.slack_last_sent_at = 0.0
         data_dir = os.environ.get("LINJIAN_DATA_DIR", str(here / "data"))
         self.data_dir = Path(data_dir).resolve()
         self.shots_dir = self.data_dir / "screenshots"
@@ -251,6 +351,7 @@ class State:
         temp.replace(self.activity_path)
 
     def add_activity_event(self, data: dict, dedupe_seconds: int = 0) -> dict:
+        created = False
         with self.activity_lock:
             event_id = clip_text(str(data.get("id") or ""), 100) or str(uuid.uuid4())
             previous = next((e for e in self.activity_events if e.get("id") == event_id), None)
@@ -286,19 +387,109 @@ class State:
                     entry["created_at"] = previous.get("created_at") or entry["created_at"]
                 previous.update({k: v for k, v in entry.items() if v not in ("", None) or k in ("status", "metadata_json")})
                 self.save_activity_events()
-                return dict(previous)
-            if dedupe_seconds > 0:
+                saved = dict(previous)
+            elif dedupe_seconds > 0:
                 now = time.time()
                 duplicate = next((e for e in self.activity_events[:40]
                     if e.get("device_id") == entry["device_id"] and e.get("source") == entry["source"]
                     and e.get("type") == entry["type"] and e.get("action") == entry["action"]
                     and e.get("package_name") == entry["package_name"]
                     and now - parse_iso_seconds(e.get("created_at")) <= dedupe_seconds), None)
-                if duplicate is not None: return dict(duplicate)
-            self.activity_events.insert(0, entry)
-            del self.activity_events[ACTIVITY_EVENT_LIMIT:]
-            self.save_activity_events()
-            return dict(entry)
+                if duplicate is not None:
+                    saved = dict(duplicate)
+                else:
+                    self.activity_events.insert(0, entry)
+                    del self.activity_events[ACTIVITY_EVENT_LIMIT:]
+                    self.save_activity_events()
+                    saved = dict(entry)
+                    created = True
+            else:
+                self.activity_events.insert(0, entry)
+                del self.activity_events[ACTIVITY_EVENT_LIMIT:]
+                self.save_activity_events()
+                saved = dict(entry)
+                created = True
+        if created:
+            self._forward_activity_event(saved)
+        return saved
+
+    def _forward_activity_event(self, event: dict) -> None:
+        configured = bool(
+            ((self.slack_user_token or self.slack_bot_token) and self.slack_channel_id)
+            or self.slack_webhook_url
+        )
+        if not configured or event.get("source") != "phone":
+            return
+
+        # Keep the Slack boundary safe even for internal/legacy callers that invoke
+        # add_activity_event directly instead of going through the HTTP admission guard.
+        accepted, rule = admit_event(event)
+        if not accepted:
+            sys.stderr.write(
+                f"[event-policy] rule={rule} type={str(event.get('type') or '')[:40]} "
+                f"package={str(event.get('package_name') or '')[:120]}\n"
+            )
+            return
+
+        is_noisy_app_switch = (
+            event.get("type") == "app_open" and event.get("action") == "foreground_changed"
+        )
+        if not is_noisy_app_switch:
+            self._start_slack_delivery(event)
+            return
+
+        start_now = False
+        with self.slack_forward_lock:
+            self.slack_pending_event = dict(event)
+            if self.slack_forward_timer is not None:
+                self.slack_forward_timer.cancel()
+
+            cooldown = max(
+                0.0,
+                self.slack_last_sent_at + self.slack_event_min_interval_seconds - time.monotonic(),
+            )
+            delay = max(self.slack_event_debounce_seconds, cooldown)
+            if delay <= 0:
+                self.slack_forward_timer = None
+                start_now = True
+            else:
+                timer = Timer(delay, self._flush_pending_slack_event)
+                timer.daemon = True
+                self.slack_forward_timer = timer
+                timer.start()
+
+        if start_now:
+            self._flush_pending_slack_event()
+
+    def _flush_pending_slack_event(self) -> None:
+        with self.slack_forward_lock:
+            event = self.slack_pending_event
+            self.slack_pending_event = None
+            self.slack_forward_timer = None
+        if event is not None:
+            self._start_slack_delivery(event)
+
+    def _start_slack_delivery(self, event: dict) -> None:
+
+        def deliver() -> None:
+            try:
+                post_slack_event(
+                    event,
+                    user_token=self.slack_user_token,
+                    bot_token=self.slack_bot_token,
+                    channel_id=self.slack_channel_id,
+                    webhook_url=self.slack_webhook_url,
+                )
+                with self.slack_forward_lock:
+                    self.slack_last_sent_at = time.monotonic()
+            except Exception as exc:
+                # Do not expose Slack credentials or affect the saved event.
+                sys.stderr.write(f"Slack event forwarding failed ({type(exc).__name__}).\n")
+
+        try:
+            Thread(target=deliver, name="slack-event-forward", daemon=True).start()
+        except Exception as exc:
+            sys.stderr.write(f"Slack event forwarding could not start ({type(exc).__name__}).\n")
 
     def list_activity_events(self, device_id: str = "", date: str = "", source: str = "", limit: int = 50) -> list[dict]:
         with self.activity_lock:
