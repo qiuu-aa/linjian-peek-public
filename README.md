@@ -195,7 +195,7 @@ server/       Python 同步后端，零第三方依赖
 mcp/          Node.js MCP 服务
 docs/         安装、版本和 MCP 工具说明
 render.yaml   Render Blueprint 一键部署配置
-update.json   版本更新信息
+update.json   Android 自更新的唯一版本清单
 ```
 
 ## 构建 APK
@@ -203,16 +203,27 @@ update.json   版本更新信息
 ### GitHub Actions 构建
 
 1. 将源码包解压并覆盖到公开仓库根目录，确保 `.github`、`android`、`server`、`mcp` 位于根目录。
-2. 打开 GitHub 仓库 → **Actions** → **Build Android Public APK** → **Run workflow**。
-3. 构建成功后下载 `zhangxinchuang-public-v0.3.8.6-apk` artifact。
+2. 打开 GitHub 仓库 → **Actions** → **Build Android Debug APK** → **Run workflow**。
+3. 构建成功后下载 `zhangxinchuang-public-debug-apk` artifact。
 
 构建产物为：
 
 ```text
-android/Zhangxinchuang-public-v0.3.8.6.apk
+android/Zhangxinchuang-public-v0.3.9.0.apk
 ```
 
-版本名 `0.3.8.6`，版本码 `30806`。
+版本名 `0.3.9.0`，版本码 `30900`。
+
+### 发布正式版本
+
+`update.json` 是 Android 自更新的唯一版本清单；不要再在 `server/` 下维护副本。发布前同时更新：
+
+- `android/app/src/main/AndroidManifest.xml` 的 `versionName` / `versionCode`
+- `android/build.sh` 的 APK 文件名
+- 根目录 `update.json` 的版本号、下载地址和更新日志
+- 对应的 `docs/public-vX.Y.Z.md` 发布说明（推荐）
+
+先运行 `python3 scripts/verify-release-metadata.py --tag vX.Y.Z`。合并到 `main` 后，在 GitHub **Actions → Release Android Public APK → Run workflow** 输入同一个 `vX.Y.Z`。工作流会继续保留 Actions artifact，并创建或更新 GitHub Release，把固定签名 APK 附加到 Release。也可以推送同名版本标签自动触发。
 
 ### 固定签名
 

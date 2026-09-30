@@ -1,0 +1,123 @@
+name: Release Android Public APK
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Release tag; must match Android version (for example v0.3.9.0)'
+        required: true
+        type: string
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Resolve release tag
+        id: release
+        shell: bash
+        env:
+          DISPATCH_TAG: ${{ inputs.tag }}
+        run: |
+          if [[ "${GITHUB_EVENT_NAME}" == "push" ]]; then
+            tag="${GITHUB_REF_NAME}"
+          else
+            tag="${DISPATCH_TAG}"
+          fi
+          echo "tag=${tag}" >> "$GITHUB_OUTPUT"
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+        with:
+          packages: 'platform-tools platforms;android-34 build-tools;34.0.0'
+
+      - name: Verify release metadata
+        run: python3 scripts/verify-release-metadata.py --tag "${{ steps.release.outputs.tag }}"
+
+      - name: Test foreground event policy
+        run: |
+          mkdir -p android/build/policy-tests
+          javac -encoding UTF-8 -source 11 -target 11 \
+            -d android/build/policy-tests \
+            android/app/src/main/java/dev/linjian/peek/ForegroundEventModel.java \
+            android/app/src/main/java/dev/linjian/peek/PackageClassifier.java \
+            android/app/src/main/java/dev/linjian/peek/EventPolicyConfig.java \
+            android/app/src/main/java/dev/linjian/peek/CandidateTimePolicy.java \
+            android/tests/dev/linjian/peek/ForegroundEventModelTest.java
+          java -cp android/build/policy-tests dev.linjian.peek.ForegroundEventModelTest
+
+      - name: Build signed APK
+        run: bash android/build.sh
+
+      - name: Verify APK version and signature
+        shell: bash
+        run: |
+          version="${{ steps.release.outputs.tag }}"
+          version="${version#v}"
+          version_code="$(python3 - <<'PY'
+          import re
+          from pathlib import Path
+          text = Path('android/app/src/main/AndroidManifest.xml').read_text(encoding='utf-8')
+          print(re.search(r'android:versionCode="(\d+)"', text).group(1))
+          PY
+          )"
+          apk="android/Zhangxinchuang-public-v${version}.apk"
+          test -f "$apk"
+          "$ANDROID_HOME/build-tools/34.0.0/aapt" dump badging "$apk" | tee /tmp/apk-badging.txt
+          grep -F "versionCode='${version_code}'" /tmp/apk-badging.txt
+          grep -F "versionName='${version}'" /tmp/apk-badging.txt
+          "$ANDROID_HOME/build-tools/34.0.0/apksigner" verify --verbose --print-certs "$apk" | tee /tmp/apk-signature.txt
+          grep -qi "aea75c9b2b5f5c42d56b72d4a69a79a38e1c57f27db021017be8656bc8f002fb" /tmp/apk-signature.txt
+          sha256sum "$apk"
+
+      - name: Upload versioned Actions artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: zhangxinchuang-public-${{ steps.release.outputs.tag }}-apk
+          path: android/Zhangxinchuang-public-*.apk
+          if-no-files-found: error
+
+      - name: Create or update GitHub Release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ steps.release.outputs.tag }}
+        run: |
+          version="${RELEASE_TAG#v}"
+          apk="android/Zhangxinchuang-public-v${version}.apk"
+          notes="docs/public-v${version}.md"
+          if [[ ! -f "$notes" ]]; then
+            notes=""
+          fi
+
+          if gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
+            gh release upload "$RELEASE_TAG" "$apk" --clobber
+            if [[ -n "$notes" ]]; then
+              gh release edit "$RELEASE_TAG" --title "掌心窗 ${RELEASE_TAG}" --notes-file "$notes"
+            fi
+          elif [[ -n "$notes" ]]; then
+            gh release create "$RELEASE_TAG" "$apk" \
+              --target "$GITHUB_SHA" \
+              --title "掌心窗 ${RELEASE_TAG}" \
+              --notes-file "$notes"
+          else
+            gh release create "$RELEASE_TAG" "$apk" \
+              --target "$GITHUB_SHA" \
+              --title "掌心窗 ${RELEASE_TAG}" \
+              --generate-notes
+          fi
