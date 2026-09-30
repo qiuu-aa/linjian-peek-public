@@ -223,7 +223,7 @@ android/Zhangxinchuang-public-v0.3.9.0.apk
 - 根目录 `update.json` 的版本号、下载地址和更新日志
 - 对应的 `docs/public-vX.Y.Z.md` 发布说明（推荐）
 
-先运行 `python3 scripts/verify-release-metadata.py --tag vX.Y.Z`。合并到 `main` 后，在 GitHub **Actions → Release Android Public APK → Run workflow** 输入同一个 `vX.Y.Z`。工作流会继续保留 Actions artifact，并创建或更新 GitHub Release，把固定签名 APK 附加到 Release。也可以推送同名版本标签自动触发。
+先运行 `python3 scripts/verify-release-metadata.py --tag vX.Y.Z`。上述版本文件合并到 `main` 后，工作流会自动创建或更新同版本 GitHub Release，同时保留版本化 Actions artifact，并把固定签名 APK 附加到 Release。也可以在 GitHub **Actions → Release Android Public APK → Run workflow** 手动输入 `vX.Y.Z`，或推送同名版本标签触发。
 
 ### 固定签名
 
