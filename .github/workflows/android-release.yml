@@ -2,8 +2,15 @@ name: Release Android Public APK
 
 on:
   push:
+    branches:
+      - main
     tags:
       - 'v*'
+    paths:
+      - 'android/app/src/main/AndroidManifest.xml'
+      - 'android/build.sh'
+      - 'update.json'
+      - '.github/workflows/android-release.yml'
   workflow_dispatch:
     inputs:
       tag:
@@ -28,8 +35,17 @@ jobs:
         env:
           DISPATCH_TAG: ${{ inputs.tag }}
         run: |
-          if [[ "${GITHUB_EVENT_NAME}" == "push" ]]; then
+          if [[ "${GITHUB_EVENT_NAME}" == "push" && "${GITHUB_REF_TYPE}" == "tag" ]]; then
             tag="${GITHUB_REF_NAME}"
+          elif [[ "${GITHUB_EVENT_NAME}" == "push" ]]; then
+            version="$(python3 - <<'PY'
+          import re
+          from pathlib import Path
+          text = Path('android/app/src/main/AndroidManifest.xml').read_text(encoding='utf-8')
+          print(re.search(r'android:versionName="([^"]+)"', text).group(1))
+          PY
+            )"
+            tag="v${version}"
           else
             tag="${DISPATCH_TAG}"
           fi
