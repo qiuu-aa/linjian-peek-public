@@ -35,7 +35,7 @@ Android AccessibilityEvent
 | `event_morning_inactive_minutes` | 240 分钟 | 早晨恢复活跃前的无活动阈值 |
 | `event_afternoon_inactive_minutes` | 90 分钟 | 下午恢复活跃前的无活动阈值 |
 
-固定时间窗口也集中在 `EventPolicyConfig`：Asia/Shanghai、早晨 06:00–11:00、下午 13:00–18:00、深夜 23:30–03:00、午饭 11:30–13:30、晚饭 17:30–20:00。饭点不增加轮询，只在下一次有效前台活动时判断。
+固定时间窗口也集中在 `EventPolicyConfig`：Asia/Shanghai、早晨 06:00–13:00、下午 13:00–18:00、深夜 23:30–03:00、午饭 11:30–13:30、晚饭 17:30–20:00。早晨窗口覆盖睡到中午的晚起场景；饭点不增加轮询，只在下一次有效前台活动时判断。
 
 ## 包名分类
 

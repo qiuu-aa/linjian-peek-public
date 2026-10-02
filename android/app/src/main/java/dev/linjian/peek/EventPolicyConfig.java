@@ -18,7 +18,10 @@ public final class EventPolicyConfig {
     public static final int LATE_NIGHT_SUSTAINED_MINUTES = 10;
 
     public static final int MORNING_START_MINUTE = 6 * 60;
-    public static final int MORNING_END_MINUTE = 11 * 60;
+    // Keep late wake-ups in the morning-return window. The previous 11:00
+    // cutoff dropped a valid long-idle return at 11:40 before it could reach
+    // Slack, even though the phone state and accessibility service were live.
+    public static final int MORNING_END_MINUTE = 13 * 60;
     public static final int AFTERNOON_START_MINUTE = 13 * 60;
     public static final int AFTERNOON_END_MINUTE = 18 * 60;
     public static final int LATE_NIGHT_START_MINUTE = 23 * 60 + 30;
