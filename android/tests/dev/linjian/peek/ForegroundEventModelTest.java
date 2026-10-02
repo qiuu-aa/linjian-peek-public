@@ -109,6 +109,12 @@ public final class ForegroundEventModelTest {
     private static void semanticTimeWindows() {
         check("morning_return_candidate".equals(CandidateTimePolicy.returnCandidateType(8 * 60,
                 EventPolicyConfig.minutes(300), EventPolicyConfig.minutes(240), EventPolicyConfig.minutes(90))), "morning return");
+        check("morning_return_candidate".equals(CandidateTimePolicy.returnCandidateType(11 * 60 + 40,
+                EventPolicyConfig.minutes(300), EventPolicyConfig.minutes(240), EventPolicyConfig.minutes(90))), "late morning return");
+        check("morning_return_candidate".equals(CandidateTimePolicy.returnCandidateType(12 * 60 + 59,
+                EventPolicyConfig.minutes(300), EventPolicyConfig.minutes(240), EventPolicyConfig.minutes(90))), "morning return before cutoff");
+        check("afternoon_return_candidate".equals(CandidateTimePolicy.returnCandidateType(13 * 60,
+                EventPolicyConfig.minutes(300), EventPolicyConfig.minutes(240), EventPolicyConfig.minutes(90))), "afternoon return at cutoff");
         check("afternoon_return_candidate".equals(CandidateTimePolicy.returnCandidateType(15 * 60,
                 EventPolicyConfig.minutes(120), EventPolicyConfig.minutes(240), EventPolicyConfig.minutes(90))), "afternoon return");
         check(CandidateTimePolicy.returnCandidateType(15 * 60, EventPolicyConfig.minutes(20),
