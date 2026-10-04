@@ -37,6 +37,7 @@ jobs:
             android/app/src/main/java/dev/linjian/peek/ForegroundEventModel.java \
             android/app/src/main/java/dev/linjian/peek/PackageClassifier.java \
             android/app/src/main/java/dev/linjian/peek/EventPolicyConfig.java \
+            android/app/src/main/java/dev/linjian/peek/LateNightFollowupPolicy.java \
             android/app/src/main/java/dev/linjian/peek/CandidateTimePolicy.java \
             android/tests/dev/linjian/peek/ForegroundEventModelTest.java
           java -cp android/build/policy-tests dev.linjian.peek.ForegroundEventModelTest
