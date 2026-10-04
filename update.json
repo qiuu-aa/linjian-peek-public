@@ -2,7 +2,7 @@
   "latest_version_name": "0.3.9.1",
   "latest_version_code": 30901,
   "apk_url": "https://github.com/qiuu-aa/linjian-peek-public/releases/download/v0.3.9.1/Zhangxinchuang-public-v0.3.9.1.apk",
-  "sha256": "",
+  "sha256": "0e55bd95b0da50702c710da8ce2febeda2dae43c86fc3c81d89e37db3b1c66b3",
   "required": false,
   "changelog": [
     "新增日常随机敲敲开关和每日次数设置，默认开启、每天一次。",
