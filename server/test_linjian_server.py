@@ -168,6 +168,29 @@ class SlackEventForwardingTests(unittest.TestCase):
         self.assertIn("reminder_tone=strict", payload["text"])
         self.assertIn("session_minutes=60", payload["text"])
 
+    def test_chatgpt_late_night_stages_are_forwarded(self):
+        with tempfile.TemporaryDirectory() as data_dir, patch.dict(os.environ, {
+            "LINJIAN_DATA_DIR": data_dir, "SLACK_USER_TOKEN": "", "SLACK_BOT_TOKEN": "",
+            "SLACK_CHANNEL_ID": "", "SLACK_WEBHOOK_URL": "https://hooks.slack.test/services/example",
+        }), patch.object(linjian_server, "Thread", ImmediateThread), \
+                patch.object(linjian_server, "_read_slack_response", return_value=b"ok") as send:
+            state = linjian_server.State()
+            for stage, minutes, tone in ((1, 10, "soft"), (2, 30, "firm"), (3, 60, "strict"),
+                                         (4, 90, "strict"), (5, 120, "strict")):
+                event = self.phone_event()
+                action = "late_night_soft_checkin" if stage == 1 else "late_night_followup" if stage == 2 else "late_night_persistent_followup"
+                event.update({"id": f"chatgpt-night-{stage}", "type": "late_night_active_candidate",
+                              "action": action, "package_name": "com.openai.chatgpt", "metadata_json": {
+                                  "late_night_stage": stage, "reminder_tone": tone, "session_minutes": minutes,
+                              }})
+                state.add_activity_event(event)
+                state.add_activity_event(event)
+                self.assertEqual(send.call_count, stage, "one forwarding per phase/event ID")
+                text = json.loads(send.call_args.args[0].data)["text"]
+                for field in ("PEEPER_EVENT", "package=com.openai.chatgpt", f"action={action}",
+                              f"late_night_stage={stage}", f"reminder_tone={tone}", f"session_minutes={minutes}"):
+                    self.assertIn(field, text)
+
     def test_bot_token_is_used_when_user_token_is_missing(self):
         response = self.slack_response()
         with tempfile.TemporaryDirectory() as data_dir, \

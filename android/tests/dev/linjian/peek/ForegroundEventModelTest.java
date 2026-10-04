@@ -1,5 +1,9 @@
 package dev.linjian.peek;
 
+import java.time.Instant;
+import java.time.ZoneId;
+import java.time.ZonedDateTime;
+
 public final class ForegroundEventModelTest {
     private static final long FIVE_MINUTES = 5 * 60_000L;
 
@@ -17,6 +21,9 @@ public final class ForegroundEventModelTest {
         chatGptHelperRoundTripStaysOnChatGpt();
         semanticTimeWindows();
         lateNightFollowupStages();
+        chatGptForegroundReceivesEveryLateNightStage();
+        appSwitchesPreserveLateNightSessionAndStage();
+        lateNightSessionResetsOnlyAtStopBoundaries();
         System.out.println("ForegroundEventModelTest: all scenarios passed");
     }
 
@@ -129,6 +136,101 @@ public final class ForegroundEventModelTest {
         check("soft".equals(LateNightFollowupPolicy.toneForStage(1)), "first reminder is soft");
         check("firm".equals(LateNightFollowupPolicy.toneForStage(2)), "second reminder is firm");
         check("strict".equals(LateNightFollowupPolicy.toneForStage(3)), "later reminders are strict");
+    }
+
+    private static final long NIGHT_START = ZonedDateTime.parse("2026-10-04T23:30:00+08:00[Asia/Shanghai]")
+            .toInstant().toEpochMilli();
+
+    private static void observeNight(LateNightFollowupPolicy.Session session, long now,
+                                     boolean interactive, long foregroundStart, long windowStart) {
+        ZonedDateTime time = Instant.ofEpochMilli(now).atZone(ZoneId.of("Asia/Shanghai"));
+        session.observe(now, time.getHour() * 60 + time.getMinute(), interactive, foregroundStart, windowStart);
+    }
+
+    private static void chatGptForegroundReceivesEveryLateNightStage() {
+        ForegroundEventModel foreground = baseline("com.openai.chatgpt");
+        check(PackageClassifier.isMeaningful(PackageClassifier.classify(foreground.currentMeaningful(), "dev.linjian.peek")),
+                "ChatGPT is actual phone use");
+        LateNightFollowupPolicy.Session session = new LateNightFollowupPolicy.Session();
+        observeNight(session, NIGHT_START, true, NIGHT_START, NIGHT_START);
+        int[] minutes = {10, 30, 60, 90, 120, 150};
+        String[] tones = {"soft", "firm", "strict", "strict", "strict", "strict"};
+        String[] actions = {"late_night_soft_checkin", "late_night_followup", "late_night_persistent_followup",
+                "late_night_persistent_followup", "late_night_persistent_followup", "late_night_persistent_followup"};
+        for (int i = 0; i < minutes.length; i++) {
+            long now = NIGHT_START + EventPolicyConfig.minutes(minutes[i]);
+            observeNight(session, now - 1, true, NIGHT_START, NIGHT_START);
+            check(session.dueStage(now - 1) == 0, "ChatGPT must not fire early at " + minutes[i]);
+            observeNight(session, now, true, NIGHT_START, NIGHT_START);
+            check("com.openai.chatgpt".equals(foreground.currentMeaningful()), "still in ChatGPT");
+            int stage = session.dueStage(now);
+            check(stage == i + 1, "ChatGPT stage at " + minutes[i]);
+            check(tones[i].equals(LateNightFollowupPolicy.toneForStage(stage)), "ChatGPT tone");
+            check(actions[i].equals(LateNightFollowupPolicy.actionForStage(stage)), "ChatGPT action");
+            session.consume(stage);
+            check(session.dueStage(now) == 0, "same phase cannot repeat");
+            check(session.startedAt() == NIGHT_START, "midnight/ChatGPT never resets clock");
+        }
+    }
+
+    private static void appSwitchesPreserveLateNightSessionAndStage() {
+        ForegroundEventModel foreground = baseline("com.android.chrome");
+        LateNightFollowupPolicy.Session session = new LateNightFollowupPolicy.Session();
+        observeNight(session, NIGHT_START, true, NIGHT_START, NIGHT_START);
+        String[] packages = {"com.openai.chatgpt", "com.tencent.mm", "com.openai.chatgpt", "com.android.chrome",
+                "com.openai.chatgpt"};
+        int[] switchMinutes = {9, 20, 29, 59, 89};
+        int[] dueMinutes = {10, 30, 60, 90};
+        int dueIndex = 0;
+        for (int i = 0; i < packages.length; i++) {
+            long now = NIGHT_START + EventPolicyConfig.minutes(switchMinutes[i]);
+            int previousStage = session.stage();
+            stabilize(foreground, packages[i], now);
+            observeNight(session, now, true, now, NIGHT_START); // Per-App start changed, screen-on start must not.
+            check(session.startedAt() == NIGHT_START && session.stage() == previousStage, "switch retains clock and stage");
+            if (i == 1) continue;
+            long threshold = NIGHT_START + EventPolicyConfig.minutes(dueMinutes[dueIndex]);
+            observeNight(session, threshold, true, now, NIGHT_START);
+            check(session.dueStage(threshold) == dueIndex + 1, "cross-App accumulated stage");
+            session.consume(++dueIndex);
+        }
+        check(session.stage() == 4 && "com.openai.chatgpt".equals(foreground.currentMeaningful()), "ChatGPT repeat after cross-App session");
+        foreground.observe("com.android.systemui", false);
+        observeNight(session, NIGHT_START + EventPolicyConfig.minutes(100), true, NIGHT_START, NIGHT_START);
+        check(session.startedAt() == NIGHT_START && session.stage() == 4, "notification shade does not reset screen-on session");
+    }
+
+    private static void lateNightSessionResetsOnlyAtStopBoundaries() {
+        LateNightFollowupPolicy.Session session = new LateNightFollowupPolicy.Session();
+        observeNight(session, NIGHT_START, true, NIGHT_START, NIGHT_START);
+        session.consume(session.dueStage(NIGHT_START + EventPolicyConfig.minutes(10)));
+        long screenOff = NIGHT_START + EventPolicyConfig.minutes(20);
+        observeNight(session, screenOff, false, NIGHT_START, NIGHT_START);
+        check(session.startedAt() == 0 && session.stage() == 0, "screen off resets both fields");
+        long screenOn = NIGHT_START + EventPolicyConfig.minutes(40);
+        observeNight(session, screenOn, true, screenOn, NIGHT_START);
+        check(session.dueStage(screenOn) == 0 && session.dueStage(screenOn + EventPolicyConfig.minutes(10)) == 1,
+                "screen on starts a fresh soft phase");
+        session.consume(1);
+        session.reset(); // Same reset used by accessibility disconnect/reconnect.
+        check(session.startedAt() == 0 && session.stage() == 0, "reconnect discards old session");
+        long reconnected = screenOn + EventPolicyConfig.minutes(15);
+        observeNight(session, reconnected, true, reconnected, NIGHT_START);
+        check(session.dueStage(reconnected) == 0 && session.nextThresholdAt() == reconnected + EventPolicyConfig.minutes(10),
+                "reconnect cannot replay previous phases");
+        long six = NIGHT_START + EventPolicyConfig.minutes(390);
+        observeNight(session, six, true, reconnected, NIGHT_START);
+        check(session.startedAt() == 0 && session.stage() == 0 && session.dueStage(six) == 0, "06:00 ends the window");
+        observeNight(session, six + EventPolicyConfig.minutes(30), true, reconnected, NIGHT_START);
+        check(session.startedAt() == 0, "daytime cannot restart a late-night phase");
+        long tomorrow = NIGHT_START + EventPolicyConfig.minutes(24 * 60);
+        observeNight(session, tomorrow, true, reconnected, tomorrow);
+        check(session.startedAt() == tomorrow && session.stage() == 0, "next window clamps a long screen-on session");
+        // Even if the 06:00 callback was delayed, the next window must discard old phases.
+        session.consume(1);
+        long following = tomorrow + EventPolicyConfig.minutes(24 * 60);
+        observeNight(session, following, true, reconnected, following);
+        check(session.startedAt() == following && session.stage() == 0, "missed window boundary cannot preserve stale stages");
     }
 
     private static ForegroundEventModel baseline(String pkg) {

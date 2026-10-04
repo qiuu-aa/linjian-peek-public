@@ -23,6 +23,21 @@ class EventAdmissionTests(unittest.TestCase):
     def test_chatgpt_open_is_not_a_contact_reason(self):
         self.assertEqual(admit_event(app_event("com.openai.chatgpt")), (False, "suppressed_chatgpt_open"))
 
+    def test_chatgpt_late_night_stages_are_admitted(self):
+        stages = ((1, 10, "soft", "late_night_soft_checkin"),
+                  (2, 30, "firm", "late_night_followup"),
+                  (3, 60, "strict", "late_night_persistent_followup"),
+                  (4, 90, "strict", "late_night_persistent_followup"),
+                  (5, 120, "strict", "late_night_persistent_followup"))
+        for stage, minutes, tone, action in stages:
+            with self.subTest(stage=stage):
+                self.assertEqual(admit_event({
+                    "source": "phone", "type": "late_night_active_candidate", "action": action,
+                    "package_name": "com.openai.chatgpt", "metadata_json": {
+                        "late_night_stage": stage, "reminder_tone": tone, "session_minutes": minutes,
+                    },
+                }), (True, "emitted_candidate"))
+
     def test_old_unaggregated_foreground_events_are_blocked(self):
         self.assertEqual(admit_event(app_event("com.tencent.mm", aggregated=False))[0], False)
 

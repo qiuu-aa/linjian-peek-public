@@ -39,7 +39,7 @@ Android AccessibilityEvent
 
 固定时间窗口也集中在 `EventPolicyConfig`：Asia/Shanghai、早晨 06:00–11:00、下午 13:00–18:00、深夜 23:30–06:00、午饭 11:30–13:30、晚饭 17:30–20:00。饭点不增加轮询，只在下一次有效前台活动时判断。
 
-深夜候选采用同一活跃会话内的分级提醒：持续 10 分钟产生第 1 级（soft），累计 30 分钟产生第 2 级（firm），累计 60 分钟进入第 3 级（strict），之后每 30 分钟继续产生 strict 候选。候选在打开 ChatGPT、息屏、离开深夜窗口或无障碍服务重连时停止；之后重新打开其他有效 App 会开启新会话。Slack 消息包含 `late_night_stage`、`reminder_tone` 和 `session_minutes`，下游可据此逐步收紧语气。
+深夜候选采用同一连续亮屏会话内的分级提醒：持续 10 分钟产生第 1 级（soft），累计 30 分钟产生第 2 级（firm），累计 60 分钟进入第 3 级（strict），之后每 30 分钟继续产生 strict 候选。ChatGPT 同样计入使用，切入/切出 ChatGPT 或切换其他 App 不清空计时与阶段，ChatGPT 前台也允许阶段候选。只有息屏、离开 23:30–06:00 窗口或无障碍服务生命周期重置才结束本轮。Slack 消息包含 `late_night_stage`、`reminder_tone` 和 `session_minutes`，下游可据此逐步收紧语气。普通 ChatGPT 打开事件仍被过滤，日常随机敲敲仍排除 ChatGPT；本修复不改这两条规则。
 
 活动上传和 Slack 转发均不维护失败重试队列。断网期间发送失败的旧提醒不会在恢复网络后补发；若用户仍持续活跃，只会发送下一个到点的最新阶段。
 

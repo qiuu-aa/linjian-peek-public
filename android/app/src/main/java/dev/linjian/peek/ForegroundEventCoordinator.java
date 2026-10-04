@@ -45,8 +45,7 @@ public final class ForegroundEventCoordinator {
     private static long shoppingStartedAt = 0;
     private static boolean shoppingEmitted = false;
     private static String returnCandidatePackage = "";
-    private static long lateNightSessionStartedAt = 0;
-    private static int lateNightStage = 0;
+    private static final LateNightFollowupPolicy.Session LATE_NIGHT_SESSION = new LateNightFollowupPolicy.Session();
     private static BroadcastReceiver screenReceiver;
 
     private ForegroundEventCoordinator() { }
@@ -93,9 +92,6 @@ public final class ForegroundEventCoordinator {
                 if (!MODEL.pendingPackage().isEmpty()) { MODEL.cancelPending(); cancelStable(); }
                 ActivityEventStore.logRule(ctx, PackageClassifier.ignoredRule(category), "app_open", pkg);
                 return;
-            }
-            if (PackageClassifier.isChatGpt(pkg)) {
-                clearLateNight();
             }
             long now = System.currentTimeMillis();
             if (pkg.equals(MODEL.currentMeaningful()) && MODEL.pendingPackage().isEmpty()) {
@@ -252,26 +248,23 @@ public final class ForegroundEventCoordinator {
     }
 
     private static void scheduleLateNightCandidate(Context ctx, String pkg, long now, int generation) {
-        if (PackageClassifier.isChatGpt(pkg)) {
+        if (!isDeviceInteractive(ctx)) {
             clearLateNight();
             return;
         }
         if (lateNightRunnable != null) HANDLER.removeCallbacks(lateNightRunnable);
-        if (lateNightSessionStartedAt <= 0) {
-            lateNightSessionStartedAt = CandidateTimePolicy.isLateNight(minuteOfDay(now))
-                    ? Math.max(activeSessionStartedAt, lateNightWindowStart(now))
-                    : nextLateNightWindowStart(now);
-            lateNightStage = 0;
-        }
-        int nextStage = lateNightStage + 1;
-        long thresholdAt = lateNightSessionStartedAt
-                + EventPolicyConfig.minutes(LateNightFollowupPolicy.thresholdMinutesForStage(nextStage));
+        LATE_NIGHT_SESSION.observe(now, minuteOfDay(now), true, activeSessionStartedAt, lateNightWindowStart(now));
+        long thresholdAt = LATE_NIGHT_SESSION.nextThresholdAt();
+        if (thresholdAt == 0) thresholdAt = nextLateNightWindowStart(now);
+        else thresholdAt = Math.min(thresholdAt, lateNightWindowStart(now) + EventPolicyConfig.minutes(
+                24 * 60 - EventPolicyConfig.LATE_NIGHT_START_MINUTE + EventPolicyConfig.LATE_NIGHT_END_MINUTE));
         long delay = Math.max(1000L, thresholdAt - now);
         lateNightRunnable = () -> {
             synchronized (LOCK) {
                 lateNightRunnable = null;
-                if (appContext == null || generation != lifecycleGeneration || !pkg.equals(activePackage)) return;
-                maybeEmitLateNight(appContext, pkg, System.currentTimeMillis());
+                if (appContext == null || generation != lifecycleGeneration) return;
+                // App changes only update context; this is a continuous screen-on timer.
+                maybeEmitLateNight(appContext, activePackage, System.currentTimeMillis());
             }
         };
         HANDLER.postDelayed(lateNightRunnable, delay);
@@ -336,16 +329,15 @@ public final class ForegroundEventCoordinator {
     }
     private static void maybeEmitLateNight(Context ctx, String pkg, long now) {
         int minute = minuteOfDay(now);
-        if (!pkg.equals(activePackage) || PackageClassifier.isChatGpt(pkg)
-                || !CandidateTimePolicy.isLateNight(minute) || !isDeviceInteractive(ctx)) {
+        if (!CandidateTimePolicy.isLateNight(minute) || !isDeviceInteractive(ctx)) {
             clearLateNight();
+            if (isDeviceInteractive(ctx)) scheduleLateNightCandidate(ctx, pkg, now, lifecycleGeneration);
             return;
         }
-        if (lateNightSessionStartedAt <= 0) lateNightSessionStartedAt = Math.max(activeSessionStartedAt, lateNightWindowStart(now));
-        int nextStage = lateNightStage + 1;
+        LATE_NIGHT_SESSION.observe(now, minute, true, activeSessionStartedAt, lateNightWindowStart(now));
+        int nextStage = LATE_NIGHT_SESSION.stage() + 1;
         int thresholdMinutes = LateNightFollowupPolicy.thresholdMinutesForStage(nextStage);
-        long thresholdAt = lateNightSessionStartedAt + EventPolicyConfig.minutes(thresholdMinutes);
-        if (now < thresholdAt) {
+        if (LATE_NIGHT_SESSION.dueStage(now) == 0) {
             scheduleLateNightCandidate(ctx, pkg, now, lifecycleGeneration);
             return;
         }
@@ -358,9 +350,9 @@ public final class ForegroundEventCoordinator {
                             .put("late_night_stage", nextStage)
                             .put("reminder_tone", LateNightFollowupPolicy.toneForStage(nextStage))
                             .put("session_minutes", Math.max(thresholdMinutes,
-                                    (now - lateNightSessionStartedAt) / 60_000L))
-                            .put("sustained_seconds", Math.max(1, (now - lateNightSessionStartedAt) / 1000L))), true);
-            if (emitted) lateNightStage = nextStage;
+                                    (now - LATE_NIGHT_SESSION.startedAt()) / 60_000L))
+                            .put("sustained_seconds", Math.max(1, (now - LATE_NIGHT_SESSION.startedAt()) / 1000L))), true);
+            if (emitted) LATE_NIGHT_SESSION.consume(nextStage);
             scheduleLateNightCandidate(ctx, pkg, now, lifecycleGeneration);
         } catch (Exception ignored) { }
     }
@@ -407,8 +399,7 @@ public final class ForegroundEventCoordinator {
     private static void clearLateNight() {
         if (lateNightRunnable != null) HANDLER.removeCallbacks(lateNightRunnable);
         lateNightRunnable = null;
-        lateNightSessionStartedAt = 0;
-        lateNightStage = 0;
+        LATE_NIGHT_SESSION.reset();
     }
     private static boolean isDeviceInteractive(Context ctx) {
         try {
