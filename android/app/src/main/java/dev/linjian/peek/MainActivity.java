@@ -136,7 +136,7 @@ public class MainActivity extends Activity {
         loadSettings();
         NowState.start(this);
 
-        DebugState.append(this, "掌心窗公开版 v0.3.9.0 已打开");
+        DebugState.append(this, "掌心窗公开版 v" + AppPrefs.APP_VERSION_NAME + " 已打开");
         if (Build.VERSION.SDK_INT >= 33 && checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) requestPermissions(new String[]{Manifest.permission.POST_NOTIFICATIONS}, 13);
         serviceRunning = CompanionService.isRunning();
         updateUI();
@@ -252,7 +252,8 @@ public class MainActivity extends Activity {
         if (settings != null) {
             for (int i = settings.getChildCount() - 1; i >= 0; i--) {
                 Object tag = settings.getChildAt(i).getTag();
-                if ("dynamic_privacy".equals(tag) || "dynamic_diary_backup".equals(tag)) settings.removeViewAt(i);
+                if ("dynamic_privacy".equals(tag) || "dynamic_diary_backup".equals(tag)
+                        || "dynamic_casual_random".equals(tag)) settings.removeViewAt(i);
             }
             settings.setPadding(0, 0, 0, dp(42));
             Button privacyButton = actionButton("隐私与记录  ›", false);
@@ -299,6 +300,31 @@ public class MainActivity extends Activity {
             bindDrawer(diaryBackupButton, diaryBackup, "日记本备份");
             settings.addView(diaryBackupButton, 2, marginBottom(8));
             settings.addView(diaryBackup, 3, marginBottom(8));
+            LinearLayout randomSettings = cardColumn();
+            randomSettings.setTag("dynamic_casual_random");
+            randomSettings.addView(title("日常随机敲敲", 15));
+            CheckBox randomEnabled = new CheckBox(this);
+            randomEnabled.setText("允许日常随机敲敲");
+            randomEnabled.setTextSize(11);
+            randomEnabled.setChecked(AppPrefs.get(this).getBoolean(AppPrefs.KEY_CASUAL_RANDOM_ENABLED, true));
+            randomSettings.addView(randomEnabled);
+            Button randomCount = actionButton("每日次数：" + AppPrefs.casualRandomCount(this) + " 次  ›", false);
+            randomCount.setOnClickListener(v -> new AlertDialog.Builder(this).setTitle("每日次数")
+                    .setSingleChoiceItems(new String[]{"1 次", "2 次", "3 次"}, AppPrefs.casualRandomCount(this) - 1,
+                            (dialog, which) -> {
+                                CasualRandomKnockScheduler.settingsChanged(this, randomEnabled.isChecked(), which + 1);
+                                randomCount.setText("每日次数：" + (which + 1) + " 次  ›");
+                                dialog.dismiss();
+                            }).show());
+            randomSettings.addView(randomCount);
+            randomSettings.addView(body("10:30–22:30，避开午晚饭与近期重要事件；条件不适合时安静跳过。", 9));
+            randomEnabled.setOnCheckedChangeListener((button, checked) -> {
+                CasualRandomKnockScheduler.settingsChanged(this, checked, AppPrefs.casualRandomCount(this));
+                randomCount.setEnabled(checked);
+            });
+            randomCount.setEnabled(randomEnabled.isChecked());
+            settings.addView(randomSettings, 4, marginBottom(8));
+            CasualRandomKnockScheduler.initialize(this);
         }
     }
 
@@ -2485,7 +2511,7 @@ public class MainActivity extends Activity {
         getSharedPreferences(AppPrefs.PREFS, MODE_PRIVATE).edit().putBoolean("user_stopped", false).apply(); requestIgnoreBatteryOptimization();
         Intent intent = new Intent(this, CompanionService.class); intent.putExtra("server_url", url); intent.putExtra("token", token);
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) startForegroundService(intent); else startService(intent);
-        DebugState.append(this, "已请求启动前台服务：公开版 v0.3.9.0 右侧 love 线稿花枝已启用"); serviceRunning = true; updateUI();
+        DebugState.append(this, "已请求启动前台服务：公开版 v" + AppPrefs.APP_VERSION_NAME + " 右侧 love 线稿花枝已启用"); serviceRunning = true; updateUI();
     }
 
     private void stopCompanionService() { getSharedPreferences(AppPrefs.PREFS, MODE_PRIVATE).edit().putBoolean("user_stopped", true).apply(); stopService(new Intent(this, CompanionService.class)); DebugState.append(this, "已停止服务"); serviceRunning = false; updateUI(); }

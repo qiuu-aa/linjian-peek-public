@@ -240,6 +240,11 @@ def slack_event_text(event: dict) -> str:
         ("occurred_at", event.get("created_at")),
         ("event_id", event.get("id")),
     )
+    if event.get("action") == "casual_random_knock":
+        fields += tuple((key, metadata.get(key)) for key in (
+            "knock_index", "plan_total", "requested_count", "planned_at", "actual_at",
+            "delay_minutes", "package_category", "expires_at_ms",
+        ))
     return "PEEPER_EVENT\n" + "\n".join(f"{key}={_slack_field(value)}" for key, value in fields)
 
 
@@ -256,6 +261,9 @@ def post_slack_event(
     channel_id: str = "",
     webhook_url: str = "",
 ) -> None:
+    if event.get("action") == "casual_random_knock" and not admit_event(event)[0]:
+        # A worker may start after admission; never deliver a now-expired target.
+        return
     text = slack_event_text(event)
     api_token = user_token or bot_token
     if api_token and channel_id:
@@ -656,7 +664,7 @@ class Handler(BaseHTTPRequestHandler):
         path = parsed.path
         qs = parse_qs(parsed.query)
         if path in ("/", "/health"):
-            self._json(200, {"ok": True, "service": "linjian-public", "name": "掌心窗", "version": VERSION, "tools": sorted(ALLOWED_ACTIONS), "guidian": True, "calendar": True, "diary": True, "diary_storage": "phone_local", "app_gate": True, "focus_tools": True, "diary_rename_fix": True, "diary_write_fallback": True, "diary_annotation_tools": True, "diary_annotation_whitelist_fix": True, "event_admission_policy": "candidate-v2"})
+            self._json(200, {"ok": True, "service": "linjian-public", "name": "掌心窗", "version": VERSION, "tools": sorted(ALLOWED_ACTIONS), "guidian": True, "calendar": True, "diary": True, "diary_storage": "phone_local", "app_gate": True, "focus_tools": True, "diary_rename_fix": True, "diary_write_fallback": True, "diary_annotation_tools": True, "diary_annotation_whitelist_fix": True, "event_admission_policy": "candidate-v2", "casual_random_knock": True})
             return
         if path in ("/mcp", "/sse"):
             self._json(400, {"ok": False, "error": "LINJIAN_ERR_WRONG_SERVICE", "message": "你访问的是掌心窗 server 服务，不是 MCP 服务。请单独部署 mcp 目录，并在 MCP 客户端填写 MCP 服务域名 + /mcp 或 /sse。"})

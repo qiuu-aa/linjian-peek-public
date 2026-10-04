@@ -1596,6 +1596,11 @@ function admitActivityEvent(data) {
   const type = String(data?.type || "").trim(); const action = String(data?.action || "").trim();
   const pkg = String(data?.package_name || data?.package || "").trim().toLowerCase(); const metadata = eventMetadata(data);
   const ignored = packageAdmissionRule(pkg); if (ignored) return [false, ignored];
+  if (action === "casual_random_knock") {
+    if (!pkg || pkg === "com.openai.chatgpt") return [false, "ignored_helper_ui"];
+    if (!Number.isFinite(Number(metadata.expires_at_ms)) || Number(metadata.expires_at_ms) < Date.now()) return [false, "suppressed_expired_casual_random"];
+    return [true, "emitted_candidate"];
+  }
   if (type === "phone_activity" && !action && !String(metadata.subtype || "").trim()) return [false, "suppressed_unknown_phone_activity"];
   if (type === "app_open") {
     if (pkg === "com.openai.chatgpt") return [false, "suppressed_chatgpt_open"];

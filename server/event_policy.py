@@ -30,7 +30,7 @@ LOCAL_ONLY_PACKAGES = {
 CANDIDATE_TYPES = {
     "morning_return_candidate", "afternoon_return_candidate", "late_night_active_candidate",
     "long_app_session_candidate", "shopping_or_takeout_candidate", "travel_candidate",
-    "meal_window_candidate", "metric_threshold_candidate",
+    "meal_window_candidate", "metric_threshold_candidate", "casual_random_candidate",
 }
 
 IMPORTANT_PHONE_TYPES = {
@@ -72,6 +72,17 @@ def admit_event(data: dict[str, Any]) -> tuple[bool, str]:
     ignored = package_rule(package)
     if ignored:
         return False, ignored
+    if action == "casual_random_knock":
+        if not package or package == CHATGPT_PACKAGE:
+            return False, "suppressed_chatgpt_open" if package == CHATGPT_PACKAGE else "ignored_helper_ui"
+        import time
+        try:
+            expires = int(metadata.get("expires_at_ms") or 0)
+        except (TypeError, ValueError):
+            expires = 0
+        if not expires or time.time() * 1000 > expires:
+            return False, "suppressed_expired_casual_random"
+        return True, "emitted_candidate"
     if event_type == "phone_activity" and not action and not str(metadata.get("subtype") or "").strip():
         return False, "suppressed_unknown_phone_activity"
     if event_type == "app_open":

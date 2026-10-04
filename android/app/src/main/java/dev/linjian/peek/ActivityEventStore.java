@@ -246,11 +246,18 @@ public final class ActivityEventStore {
         if (base == null || base.trim().isEmpty() || token == null || token.trim().isEmpty()) return;
         new Thread(() -> {
             try {
+                if ("casual_random_knock".equals(event.optString("action"))
+                        && !CasualRandomKnockScheduler.canUploadNow(ctx, event)) {
+                    DebugState.append(ctx, "随机敲敲：发送前条件变化，跳过且不补发");
+                    return;
+                }
                 HttpURLConnection c = (HttpURLConnection) new URL(base.replaceAll("/+$", "") + "/api/activity/events").openConnection();
                 c.setRequestMethod("POST"); c.setConnectTimeout(7000); c.setReadTimeout(7000); c.setDoOutput(true);
                 c.setRequestProperty("X-Auth-Token", token); c.setRequestProperty("Content-Type", "application/json; charset=utf-8");
                 try (OutputStream out = c.getOutputStream()) { out.write(event.toString().getBytes(StandardCharsets.UTF_8)); }
-                c.getResponseCode(); c.disconnect();
+                int response = c.getResponseCode();
+                if (response == 200 || response == 201) CasualRandomKnockScheduler.recordSuccessfulEvent(ctx, event);
+                c.disconnect();
             } catch (Exception ignored) { }
         }, "activity-event-upload").start();
     }
