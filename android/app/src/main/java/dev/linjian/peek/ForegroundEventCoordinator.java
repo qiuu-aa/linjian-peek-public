@@ -1,9 +1,14 @@
 package dev.linjian.peek;
 
+import android.content.BroadcastReceiver;
 import android.content.Context;
+import android.content.Intent;
+import android.content.IntentFilter;
 import android.content.SharedPreferences;
+import android.os.Build;
 import android.os.Handler;
 import android.os.Looper;
+import android.os.PowerManager;
 
 import org.json.JSONObject;
 
@@ -20,7 +25,6 @@ public final class ForegroundEventCoordinator {
     private static final String KEY_LAST_ACTIVITY_AT = "event_last_meaningful_activity_at_v2";
     private static final String KEY_MORNING_DAY = "event_morning_return_day_v2";
     private static final String KEY_AFTERNOON_DAY = "event_afternoon_return_day_v2";
-    private static final String KEY_LATE_NIGHT_ID = "event_late_night_id_v2";
     private static final String KEY_MEAL_ID = "event_meal_window_id_v2";
 
     private static final Object LOCK = new Object();
@@ -41,6 +45,9 @@ public final class ForegroundEventCoordinator {
     private static long shoppingStartedAt = 0;
     private static boolean shoppingEmitted = false;
     private static String returnCandidatePackage = "";
+    private static long lateNightSessionStartedAt = 0;
+    private static int lateNightStage = 0;
+    private static BroadcastReceiver screenReceiver;
 
     private ForegroundEventCoordinator() { }
 
@@ -54,6 +61,8 @@ public final class ForegroundEventCoordinator {
             activeSessionStartedAt = 0;
             longSessionEmitted = false;
             clearShopping();
+            clearLateNight();
+            registerScreenReceiver(appContext);
             DebugState.append(ctx, "event_policy lifecycle_reset pending_discarded");
         }
     }
@@ -66,6 +75,8 @@ public final class ForegroundEventCoordinator {
             activePackage = "";
             activeSessionStartedAt = 0;
             clearShopping();
+            clearLateNight();
+            unregisterScreenReceiver();
             appContext = null;
         }
     }
@@ -83,8 +94,18 @@ public final class ForegroundEventCoordinator {
                 ActivityEventStore.logRule(ctx, PackageClassifier.ignoredRule(category), "app_open", pkg);
                 return;
             }
+            if (PackageClassifier.isChatGpt(pkg)) {
+                clearLateNight();
+            }
             long now = System.currentTimeMillis();
             if (pkg.equals(MODEL.currentMeaningful()) && MODEL.pendingPackage().isEmpty()) {
+                if (activeSessionStartedAt <= 0 || activePackage.isEmpty()) {
+                    activePackage = pkg;
+                    activeSessionStartedAt = now;
+                    longSessionEmitted = false;
+                    scheduleLongSession(ctx, pkg, lifecycleGeneration);
+                    updateShoppingSession(ctx, pkg, now, lifecycleGeneration);
+                }
                 SharedPreferences prefs = AppPrefs.get(ctx);
                 long previousActivityAt = prefs.getLong(KEY_LAST_ACTIVITY_AT, 0);
                 prefs.edit().putLong(KEY_LAST_ACTIVITY_AT, now).apply();
@@ -92,7 +113,7 @@ public final class ForegroundEventCoordinator {
                 maybeEmitMealCandidate(ctx, pkg, now);
                 maybeEmitLongSession(ctx, pkg, now);
                 maybeEmitShopping(ctx, now);
-                maybeEmitLateNight(ctx, pkg, now);
+                scheduleLateNightCandidate(ctx, pkg, now, lifecycleGeneration);
                 return;
             }
             ForegroundEventModel.Decision decision = MODEL.observe(pkg, true);
@@ -103,6 +124,7 @@ public final class ForegroundEventCoordinator {
                 prefs.edit().putLong(KEY_LAST_ACTIVITY_AT, now).apply();
                 scheduleReturnCandidate(ctx, pkg, previousActivityAt, now, lifecycleGeneration);
                 maybeEmitMealCandidate(ctx, pkg, now);
+                scheduleLateNightCandidate(ctx, pkg, now, lifecycleGeneration);
                 ActivityEventStore.logRule(ctx, "cancelled_return_to_origin", "app_open", pkg);
                 return;
             }
@@ -230,10 +252,24 @@ public final class ForegroundEventCoordinator {
     }
 
     private static void scheduleLateNightCandidate(Context ctx, String pkg, long now, int generation) {
+        if (PackageClassifier.isChatGpt(pkg)) {
+            clearLateNight();
+            return;
+        }
         if (lateNightRunnable != null) HANDLER.removeCallbacks(lateNightRunnable);
-        long delay = lateNightDelay(now);
+        if (lateNightSessionStartedAt <= 0) {
+            lateNightSessionStartedAt = CandidateTimePolicy.isLateNight(minuteOfDay(now))
+                    ? Math.max(activeSessionStartedAt, lateNightWindowStart(now))
+                    : nextLateNightWindowStart(now);
+            lateNightStage = 0;
+        }
+        int nextStage = lateNightStage + 1;
+        long thresholdAt = lateNightSessionStartedAt
+                + EventPolicyConfig.minutes(LateNightFollowupPolicy.thresholdMinutesForStage(nextStage));
+        long delay = Math.max(1000L, thresholdAt - now);
         lateNightRunnable = () -> {
             synchronized (LOCK) {
+                lateNightRunnable = null;
                 if (appContext == null || generation != lifecycleGeneration || !pkg.equals(activePackage)) return;
                 maybeEmitLateNight(appContext, pkg, System.currentTimeMillis());
             }
@@ -300,21 +336,32 @@ public final class ForegroundEventCoordinator {
     }
     private static void maybeEmitLateNight(Context ctx, String pkg, long now) {
         int minute = minuteOfDay(now);
-        if (!pkg.equals(activePackage) || !CandidateTimePolicy.isLateNight(minute)) return;
-        String night = nightId(now);
-        if (night.equals(AppPrefs.get(ctx).getString(KEY_LATE_NIGHT_ID, ""))) return;
-        long windowStart = lateNightWindowStart(now);
-        long thresholdAt = Math.max(activeSessionStartedAt, windowStart)
-                + EventPolicyConfig.minutes(EventPolicyConfig.LATE_NIGHT_SUSTAINED_MINUTES);
-        if (now < thresholdAt) return;
+        if (!pkg.equals(activePackage) || PackageClassifier.isChatGpt(pkg)
+                || !CandidateTimePolicy.isLateNight(minute) || !isDeviceInteractive(ctx)) {
+            clearLateNight();
+            return;
+        }
+        if (lateNightSessionStartedAt <= 0) lateNightSessionStartedAt = Math.max(activeSessionStartedAt, lateNightWindowStart(now));
+        int nextStage = lateNightStage + 1;
+        int thresholdMinutes = LateNightFollowupPolicy.thresholdMinutesForStage(nextStage);
+        long thresholdAt = lateNightSessionStartedAt + EventPolicyConfig.minutes(thresholdMinutes);
+        if (now < thresholdAt) {
+            scheduleLateNightCandidate(ctx, pkg, now, lifecycleGeneration);
+            return;
+        }
         try {
             boolean emitted = ActivityEventStore.emitCandidate(ctx, new JSONObject()
                     .put("source", "phone").put("type", "late_night_active_candidate")
                     .put("title", "深夜时段仍持续使用").put("package_name", pkg)
-                    .put("action", "late_night_sustained_activity").put("status", "completed")
-                    .put("metadata_json", new JSONObject().put("sustained_seconds",
-                            EventPolicyConfig.LATE_NIGHT_SUSTAINED_MINUTES * 60)), false);
-            if (emitted) AppPrefs.get(ctx).edit().putString(KEY_LATE_NIGHT_ID, night).apply();
+                    .put("action", LateNightFollowupPolicy.actionForStage(nextStage)).put("status", "completed")
+                    .put("metadata_json", new JSONObject()
+                            .put("late_night_stage", nextStage)
+                            .put("reminder_tone", LateNightFollowupPolicy.toneForStage(nextStage))
+                            .put("session_minutes", Math.max(thresholdMinutes,
+                                    (now - lateNightSessionStartedAt) / 60_000L))
+                            .put("sustained_seconds", Math.max(1, (now - lateNightSessionStartedAt) / 1000L))), true);
+            if (emitted) lateNightStage = nextStage;
+            scheduleLateNightCandidate(ctx, pkg, now, lifecycleGeneration);
         } catch (Exception ignored) { }
     }
     private static void scheduleReturnEmission(String pkg, String type, String dayKey, String day,
@@ -349,28 +396,70 @@ public final class ForegroundEventCoordinator {
         if (longSessionRunnable != null) HANDLER.removeCallbacks(longSessionRunnable);
         if (shoppingRunnable != null) HANDLER.removeCallbacks(shoppingRunnable);
         if (returnRunnable != null) HANDLER.removeCallbacks(returnRunnable);
-        if (lateNightRunnable != null) HANDLER.removeCallbacks(lateNightRunnable);
-        mergeRunnable = null; longSessionRunnable = null; shoppingRunnable = null; returnRunnable = null; lateNightRunnable = null;
+        clearLateNight();
+        mergeRunnable = null; longSessionRunnable = null; shoppingRunnable = null; returnRunnable = null;
         returnCandidatePackage = "";
     }
     private static void clearShopping() {
         if (shoppingRunnable != null) HANDLER.removeCallbacks(shoppingRunnable);
         shoppingRunnable = null; shoppingStartedAt = 0; shoppingEmitted = false; SHOPPING_PACKAGES.clear();
     }
+    private static void clearLateNight() {
+        if (lateNightRunnable != null) HANDLER.removeCallbacks(lateNightRunnable);
+        lateNightRunnable = null;
+        lateNightSessionStartedAt = 0;
+        lateNightStage = 0;
+    }
+    private static boolean isDeviceInteractive(Context ctx) {
+        try {
+            PowerManager power = (PowerManager) ctx.getSystemService(Context.POWER_SERVICE);
+            return power == null || power.isInteractive();
+        } catch (Exception ignored) {
+            return true;
+        }
+    }
+    private static void registerScreenReceiver(Context ctx) {
+        unregisterScreenReceiver();
+        screenReceiver = new BroadcastReceiver() {
+            @Override public void onReceive(Context context, Intent intent) {
+                if (intent != null && Intent.ACTION_SCREEN_OFF.equals(intent.getAction())) {
+                    synchronized (LOCK) {
+                        clearLateNight();
+                        if (longSessionRunnable != null) HANDLER.removeCallbacks(longSessionRunnable);
+                        longSessionRunnable = null;
+                        activePackage = "";
+                        activeSessionStartedAt = 0;
+                        longSessionEmitted = false;
+                        clearShopping();
+                        DebugState.append(context, "event_policy rule=late_night_stopped_screen_off");
+                    }
+                }
+            }
+        };
+        IntentFilter filter = new IntentFilter(Intent.ACTION_SCREEN_OFF);
+        try {
+            if (Build.VERSION.SDK_INT >= 33) ctx.registerReceiver(screenReceiver, filter, Context.RECEIVER_NOT_EXPORTED);
+            else ctx.registerReceiver(screenReceiver, filter);
+        } catch (Exception ignored) {
+            screenReceiver = null;
+        }
+    }
+    private static void unregisterScreenReceiver() {
+        if (screenReceiver == null || appContext == null) return;
+        try { appContext.unregisterReceiver(screenReceiver); }
+        catch (Exception ignored) { }
+        screenReceiver = null;
+    }
     private static Calendar shanghai(long ms) { Calendar c = Calendar.getInstance(TimeZone.getTimeZone(EventPolicyConfig.TIME_ZONE), Locale.CHINA); c.setTimeInMillis(ms); return c; }
     private static int minuteOfDay(long ms) { Calendar c = shanghai(ms); return c.get(Calendar.HOUR_OF_DAY) * 60 + c.get(Calendar.MINUTE); }
     private static String dayId(long ms) { SimpleDateFormat f = new SimpleDateFormat("yyyy-MM-dd", Locale.CHINA); f.setTimeZone(TimeZone.getTimeZone(EventPolicyConfig.TIME_ZONE)); return f.format(new Date(ms)); }
-    private static String nightId(long ms) { Calendar c = shanghai(ms); if (c.get(Calendar.HOUR_OF_DAY) < 3) c.add(Calendar.DAY_OF_MONTH, -1); return dayId(c.getTimeInMillis()); }
-    private static long lateNightDelay(long now) {
-        int minute = minuteOfDay(now);
-        long sustained = EventPolicyConfig.minutes(EventPolicyConfig.LATE_NIGHT_SUSTAINED_MINUTES);
-        if (CandidateTimePolicy.isLateNight(minute)) return sustained;
+    private static long nextLateNightWindowStart(long now) {
         Calendar target = shanghai(now);
         target.set(Calendar.HOUR_OF_DAY, EventPolicyConfig.LATE_NIGHT_START_MINUTE / 60);
         target.set(Calendar.MINUTE, EventPolicyConfig.LATE_NIGHT_START_MINUTE % 60);
         target.set(Calendar.SECOND, 0); target.set(Calendar.MILLISECOND, 0);
         if (target.getTimeInMillis() <= now) target.add(Calendar.DAY_OF_MONTH, 1);
-        return Math.max(1000L, target.getTimeInMillis() - now + sustained);
+        return target.getTimeInMillis();
     }
     private static long lateNightWindowStart(long now) {
         Calendar start = shanghai(now);

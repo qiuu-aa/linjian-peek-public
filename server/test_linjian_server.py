@@ -108,6 +108,9 @@ class SlackEventForwardingTests(unittest.TestCase):
             "to_package=com.android.chrome\n"
             "transition_count=2\n"
             "window_seconds=300\n"
+            "late_night_stage=\n"
+            "reminder_tone=\n"
+            "session_minutes=\n"
             "occurred_at=2026-09-27T08:17:50Z\n"
             "event_id=05392753-test-event",
         )
@@ -134,6 +137,36 @@ class SlackEventForwardingTests(unittest.TestCase):
             state.add_activity_event(chatgpt)
 
         mocked_urlopen.assert_not_called()
+
+    def test_late_night_stage_metadata_is_forwarded(self):
+        response = self.slack_response()
+        late_night = self.phone_event()
+        late_night.update({
+            "id": "late-night-stage-3",
+            "type": "late_night_active_candidate",
+            "action": "late_night_persistent_followup",
+            "metadata_json": {
+                "candidate": True,
+                "late_night_stage": 3,
+                "reminder_tone": "strict",
+                "session_minutes": 60,
+            },
+        })
+
+        with tempfile.TemporaryDirectory() as data_dir, \
+                patch.dict(os.environ, {
+                    "LINJIAN_DATA_DIR": data_dir,
+                    "SLACK_USER_TOKEN": "xoxp-test-token",
+                    "SLACK_CHANNEL_ID": "C0C4U2ZGBDX",
+                }), \
+                patch.object(linjian_server, "Thread", ImmediateThread), \
+                patch.object(linjian_server, "urlopen", return_value=response) as mocked_urlopen:
+            linjian_server.State().add_activity_event(late_night)
+
+        payload = json.loads(mocked_urlopen.call_args.args[0].data.decode("utf-8"))
+        self.assertIn("late_night_stage=3", payload["text"])
+        self.assertIn("reminder_tone=strict", payload["text"])
+        self.assertIn("session_minutes=60", payload["text"])
 
     def test_bot_token_is_used_when_user_token_is_missing(self):
         response = self.slack_response()
