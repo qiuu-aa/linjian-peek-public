@@ -2,6 +2,8 @@ name: Build Android Debug APK
 
 on:
   workflow_dispatch:
+  pull_request:
+    branches: [main]
   push:
     paths:
       - 'android/**'
@@ -38,9 +40,17 @@ jobs:
             android/app/src/main/java/dev/linjian/peek/PackageClassifier.java \
             android/app/src/main/java/dev/linjian/peek/EventPolicyConfig.java \
             android/app/src/main/java/dev/linjian/peek/LateNightFollowupPolicy.java \
+            android/app/src/main/java/dev/linjian/peek/CasualRandomKnockPolicy.java \
             android/app/src/main/java/dev/linjian/peek/CandidateTimePolicy.java \
-            android/tests/dev/linjian/peek/ForegroundEventModelTest.java
+            android/tests/dev/linjian/peek/ForegroundEventModelTest.java \
+            android/tests/dev/linjian/peek/CasualRandomKnockPolicyTest.java
           java -cp android/build/policy-tests dev.linjian.peek.ForegroundEventModelTest
+          java -cp android/build/policy-tests dev.linjian.peek.CasualRandomKnockPolicyTest
+
+      - name: Test server event admission and Slack forwarding
+        run: |
+          PYTHONPATH=server python3 -m unittest discover -s server -p 'test*.py' -v
+          python3 -m unittest discover -s server/tests -v
 
       - name: Build APK
         run: bash android/build.sh
