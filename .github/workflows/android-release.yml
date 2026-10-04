@@ -1,6 +1,8 @@
 name: Release Android Public APK
 
 on:
+  pull_request:
+    branches: [main]
   push:
     branches:
       - main
@@ -14,7 +16,7 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: 'Release tag; must match Android version (for example v0.3.9.0)'
+        description: 'Release tag; must match Android version (for example v0.3.9.1)'
         required: true
         type: string
 
@@ -37,7 +39,7 @@ jobs:
         run: |
           if [[ "${GITHUB_EVENT_NAME}" == "push" && "${GITHUB_REF_TYPE}" == "tag" ]]; then
             tag="${GITHUB_REF_NAME}"
-          elif [[ "${GITHUB_EVENT_NAME}" == "push" ]]; then
+          elif [[ "${GITHUB_EVENT_NAME}" == "push" || "${GITHUB_EVENT_NAME}" == "pull_request" ]]; then
             version="$(python3 - <<'PY'
           import re
           from pathlib import Path
@@ -74,9 +76,12 @@ jobs:
             android/app/src/main/java/dev/linjian/peek/PackageClassifier.java \
             android/app/src/main/java/dev/linjian/peek/EventPolicyConfig.java \
             android/app/src/main/java/dev/linjian/peek/LateNightFollowupPolicy.java \
+            android/app/src/main/java/dev/linjian/peek/CasualRandomKnockPolicy.java \
             android/app/src/main/java/dev/linjian/peek/CandidateTimePolicy.java \
-            android/tests/dev/linjian/peek/ForegroundEventModelTest.java
+            android/tests/dev/linjian/peek/ForegroundEventModelTest.java \
+            android/tests/dev/linjian/peek/CasualRandomKnockPolicyTest.java
           java -cp android/build/policy-tests dev.linjian.peek.ForegroundEventModelTest
+          java -cp android/build/policy-tests dev.linjian.peek.CasualRandomKnockPolicyTest
 
       - name: Build signed APK
         run: bash android/build.sh
@@ -101,6 +106,7 @@ jobs:
           "$ANDROID_HOME/build-tools/34.0.0/apksigner" verify --verbose --print-certs "$apk" | tee /tmp/apk-signature.txt
           grep -qi "aea75c9b2b5f5c42d56b72d4a69a79a38e1c57f27db021017be8656bc8f002fb" /tmp/apk-signature.txt
           sha256sum "$apk"
+          sha256sum "$apk" > "${apk}.sha256"
 
       - name: Upload versioned Actions artifact
         uses: actions/upload-artifact@v4
@@ -110,6 +116,7 @@ jobs:
           if-no-files-found: error
 
       - name: Create or update GitHub Release
+        if: github.event_name != 'pull_request' && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/'))
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
@@ -123,18 +130,32 @@ jobs:
           fi
 
           if gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
-            gh release upload "$RELEASE_TAG" "$apk" --clobber
+            gh release upload "$RELEASE_TAG" "$apk" "${apk}.sha256" --clobber
             if [[ -n "$notes" ]]; then
               gh release edit "$RELEASE_TAG" --title "掌心窗 ${RELEASE_TAG}" --notes-file "$notes"
             fi
           elif [[ -n "$notes" ]]; then
-            gh release create "$RELEASE_TAG" "$apk" \
+            gh release create "$RELEASE_TAG" "$apk" "${apk}.sha256" \
               --target "$GITHUB_SHA" \
               --title "掌心窗 ${RELEASE_TAG}" \
               --notes-file "$notes"
           else
-            gh release create "$RELEASE_TAG" "$apk" \
+            gh release create "$RELEASE_TAG" "$apk" "${apk}.sha256" \
               --target "$GITHUB_SHA" \
               --title "掌心窗 ${RELEASE_TAG}" \
               --generate-notes
+          fi
+
+      - name: Publish actual APK SHA-256 to update manifest
+        if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
+        env:
+          RELEASE_TAG: ${{ steps.release.outputs.tag }}
+        run: |
+          python3 scripts/update-apk-sha256.py "android/Zhangxinchuang-public-${RELEASE_TAG}.apk"
+          if ! git diff --quiet -- update.json; then
+            git config user.name "github-actions[bot]"
+            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+            git add update.json
+            git commit -m "Record ${RELEASE_TAG} APK checksum [skip ci]"
+            git push origin HEAD:main
           fi

@@ -1,4 +1,11 @@
-# 掌心窗公开版 v0.3.9.0
+# 掌心窗公开版 v0.3.9.1
+
+## v0.3.9.1 日常随机敲敲
+
+新增默认开启、每天一次的日常随机敲敲设置，计划持久化且过期不补发；保留现有分级熬夜与降噪规则。
+详见 [设置与手机状态门铃提示词补丁](docs/casual-random-knock.md) 和 [版本说明](docs/public-v0.3.9.1.md)。
+正式 APK：[Zhangxinchuang-public-v0.3.9.1.apk](https://github.com/qiuu-aa/linjian-peek-public/releases/download/v0.3.9.1/Zhangxinchuang-public-v0.3.9.1.apk)。
+实际签名 APK 的 SHA-256 由 Release CI 写入根目录 `update.json`，同时提供 `.apk.sha256` Release asset。
 
 ## v0.3.9.0 MCP 兼容与日记批注读取修复
 
@@ -209,10 +216,10 @@ update.json   Android 自更新的唯一版本清单
 构建产物为：
 
 ```text
-android/Zhangxinchuang-public-v0.3.9.0.apk
+android/Zhangxinchuang-public-v0.3.9.1.apk
 ```
 
-版本名 `0.3.9.0`，版本码 `30900`。
+版本名 `0.3.9.1`，版本码 `30901`。
 
 ### 发布正式版本
 

@@ -11,8 +11,10 @@ import java.util.Map;
 
 public class AppPrefs {
     public static final String PREFS = "linjian_peek";
-    public static final String APP_VERSION_NAME = "0.3.9.0";
-    public static final int APP_VERSION_CODE = 30900;
+    public static final String APP_VERSION_NAME = "0.3.9.1";
+    public static final int APP_VERSION_CODE = 30901;
+    public static final String KEY_CASUAL_RANDOM_ENABLED = "casual_random_enabled";
+    public static final String KEY_CASUAL_RANDOM_COUNT = "casual_random_daily_count";
     public static final String KEY_SERVER = "server_url";
     public static final String KEY_TOKEN = "token";
     public static final String KEY_DEVICE = "device_id";
@@ -103,6 +105,10 @@ public class AppPrefs {
         int seconds = clamp(get(ctx).getInt(KEY_FOREGROUND_STABLE_SECONDS, EventPolicyConfig.FOREGROUND_STABLE_SECONDS),
                 EventPolicyConfig.FOREGROUND_STABLE_SECONDS_MIN, EventPolicyConfig.FOREGROUND_STABLE_SECONDS_MAX);
         return seconds * 1000L;
+    }
+
+    public static int casualRandomCount(Context ctx) {
+        return CasualRandomKnockPolicy.clamp(get(ctx).getInt(KEY_CASUAL_RANDOM_COUNT, 1));
     }
 
     public static long foregroundMergeMs(Context ctx) {

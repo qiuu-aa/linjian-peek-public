@@ -1,14 +1,14 @@
 {
-  "latest_version_name": "0.3.9.0",
-  "latest_version_code": 30900,
-  "apk_url": "https://github.com/qiuu-aa/linjian-peek-public/releases/download/v0.3.9.0/Zhangxinchuang-public-v0.3.9.0.apk",
+  "latest_version_name": "0.3.9.1",
+  "latest_version_code": 30901,
+  "apk_url": "https://github.com/qiuu-aa/linjian-peek-public/releases/download/v0.3.9.1/Zhangxinchuang-public-v0.3.9.1.apk",
   "sha256": "",
   "required": false,
   "changelog": [
-    "减少短暂 App 跳转、系统界面和重复切换产生的活动事件噪声。",
-    "修复部分 AI 平台连接 MCP 时因 experimental.ovoActivityCards 触发 Invalid input 的兼容问题。",
-    "修复日记批注读取工具返回 noop：补齐批注相关 action 白名单。",
-    "保留媒体状态修复：MediaSession 主动读取媒体播放状态，通知监听作为兜底。",
-    "版本号升级到 v0.3.9.0 / 30900，固定签名保持不变。"
+    "新增日常随机敲敲开关和每日次数设置，默认开启、每天一次。",
+    "随机计划持久化，避开午晚饭，目标至少间隔两小时，90 分钟后过期放弃。",
+    "有效前台、屏幕交互和网络可用时才发送 casual_random_knock，无历史补发。",
+    "保留事件降噪和固定分级熬夜规则。",
+    "版本号升级到 v0.3.9.1 / 30901，固定签名保持不变。"
   ]
 }

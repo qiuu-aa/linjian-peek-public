@@ -1,5 +1,7 @@
 # PEEPER_EVENT 候选过滤（candidate-v2）
 
+v0.3.9.1 日常随机敲敲的设置、持久化和任务提示词补丁见 [casual-random-knock.md](casual-random-knock.md)。固定分级熬夜规则不增加设置入口。
+
 ## 完整链路与过滤位置
 
 ```text
