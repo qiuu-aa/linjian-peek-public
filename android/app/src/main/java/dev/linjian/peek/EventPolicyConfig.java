@@ -16,13 +16,16 @@ public final class EventPolicyConfig {
     public static final int LONG_APP_SESSION_MINUTES = 45;
     public static final int SHOPPING_MIN_MINUTES = 2;
     public static final int LATE_NIGHT_SUSTAINED_MINUTES = 10;
+    public static final int LATE_NIGHT_SECOND_REMINDER_MINUTES = 30;
+    public static final int LATE_NIGHT_STRICT_REMINDER_MINUTES = 60;
+    public static final int LATE_NIGHT_REPEAT_MINUTES = 30;
 
     public static final int MORNING_START_MINUTE = 6 * 60;
     public static final int MORNING_END_MINUTE = 11 * 60;
     public static final int AFTERNOON_START_MINUTE = 13 * 60;
     public static final int AFTERNOON_END_MINUTE = 18 * 60;
     public static final int LATE_NIGHT_START_MINUTE = 23 * 60 + 30;
-    public static final int LATE_NIGHT_END_MINUTE = 3 * 60;
+    public static final int LATE_NIGHT_END_MINUTE = 6 * 60;
     public static final int LUNCH_START_MINUTE = 11 * 60 + 30;
     public static final int LUNCH_END_MINUTE = 13 * 60 + 30;
     public static final int DINNER_START_MINUTE = 17 * 60 + 30;

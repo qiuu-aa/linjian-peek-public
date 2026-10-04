@@ -234,6 +234,9 @@ def slack_event_text(event: dict) -> str:
         ("to_package", metadata.get("to_package")),
         ("transition_count", metadata.get("transition_count")),
         ("window_seconds", metadata.get("window_seconds")),
+        ("late_night_stage", metadata.get("late_night_stage")),
+        ("reminder_tone", metadata.get("reminder_tone")),
+        ("session_minutes", metadata.get("session_minutes")),
         ("occurred_at", event.get("created_at")),
         ("event_id", event.get("id")),
     )

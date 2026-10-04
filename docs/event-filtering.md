@@ -35,7 +35,11 @@ Android AccessibilityEvent
 | `event_morning_inactive_minutes` | 240 分钟 | 早晨恢复活跃前的无活动阈值 |
 | `event_afternoon_inactive_minutes` | 90 分钟 | 下午恢复活跃前的无活动阈值 |
 
-固定时间窗口也集中在 `EventPolicyConfig`：Asia/Shanghai、早晨 06:00–11:00、下午 13:00–18:00、深夜 23:30–03:00、午饭 11:30–13:30、晚饭 17:30–20:00。饭点不增加轮询，只在下一次有效前台活动时判断。
+固定时间窗口也集中在 `EventPolicyConfig`：Asia/Shanghai、早晨 06:00–11:00、下午 13:00–18:00、深夜 23:30–06:00、午饭 11:30–13:30、晚饭 17:30–20:00。饭点不增加轮询，只在下一次有效前台活动时判断。
+
+深夜候选采用同一活跃会话内的分级提醒：持续 10 分钟产生第 1 级（soft），累计 30 分钟产生第 2 级（firm），累计 60 分钟进入第 3 级（strict），之后每 30 分钟继续产生 strict 候选。候选在打开 ChatGPT、息屏、离开深夜窗口或无障碍服务重连时停止；之后重新打开其他有效 App 会开启新会话。Slack 消息包含 `late_night_stage`、`reminder_tone` 和 `session_minutes`，下游可据此逐步收紧语气。
+
+活动上传和 Slack 转发均不维护失败重试队列。断网期间发送失败的旧提醒不会在恢复网络后补发；若用户仍持续活跃，只会发送下一个到点的最新阶段。
 
 ## 包名分类
 

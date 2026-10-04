@@ -16,6 +16,7 @@ public final class ForegroundEventModelTest {
         resetDropsPendingCandidate();
         chatGptHelperRoundTripStaysOnChatGpt();
         semanticTimeWindows();
+        lateNightFollowupStages();
         System.out.println("ForegroundEventModelTest: all scenarios passed");
     }
 
@@ -116,6 +117,18 @@ public final class ForegroundEventModelTest {
         check("lunch".equals(CandidateTimePolicy.mealWindow(12 * 60)), "lunch window");
         check("dinner".equals(CandidateTimePolicy.mealWindow(19 * 60)), "dinner window");
         check(CandidateTimePolicy.isLateNight(23 * 60 + 45), "late night");
+        check(CandidateTimePolicy.isLateNight(5 * 60 + 30), "late night before six");
+        check(!CandidateTimePolicy.isLateNight(6 * 60), "late night ends at six");
+    }
+
+    private static void lateNightFollowupStages() {
+        check(LateNightFollowupPolicy.thresholdMinutesForStage(1) == 10, "first late-night reminder");
+        check(LateNightFollowupPolicy.thresholdMinutesForStage(2) == 30, "second late-night reminder");
+        check(LateNightFollowupPolicy.thresholdMinutesForStage(3) == 60, "strict late-night reminder");
+        check(LateNightFollowupPolicy.thresholdMinutesForStage(4) == 90, "repeating late-night reminder");
+        check("soft".equals(LateNightFollowupPolicy.toneForStage(1)), "first reminder is soft");
+        check("firm".equals(LateNightFollowupPolicy.toneForStage(2)), "second reminder is firm");
+        check("strict".equals(LateNightFollowupPolicy.toneForStage(3)), "later reminders are strict");
     }
 
     private static ForegroundEventModel baseline(String pkg) {
