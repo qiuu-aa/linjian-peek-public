@@ -604,50 +604,7 @@ public class MainActivity extends Activity {
     }
 
     private void openPocketDashboard() {
-        final SharedPreferences prefs = getSharedPreferences("pocket_dashboard", MODE_PRIVATE);
-        String saved = prefs.getString("admin_url", "");
-        if (saved == null || saved.trim().isEmpty()) {
-            configurePocketDashboard();
-            return;
-        }
-        new AlertDialog.Builder(this)
-            .setTitle("话题小口袋")
-            .setItems(new String[]{"打开小口袋", "修改小口袋地址"}, (dialog, which) -> {
-                if (which == 0) {
-                    try { startActivity(new Intent(Intent.ACTION_VIEW, Uri.parse(saved))); }
-                    catch (Exception ignored) { Toast.makeText(this, "未找到可打开网页的应用", Toast.LENGTH_SHORT).show(); }
-                } else configurePocketDashboard();
-            }).show();
-    }
-
-    private void configurePocketDashboard() {
-        final SharedPreferences prefs = getSharedPreferences("pocket_dashboard", MODE_PRIVATE);
-        final EditText input = new EditText(this);
-        input.setSingleLine(true);
-        input.setText(prefs.getString("admin_url", ""));
-        input.setHint("https://…/admin");
-        LinearLayout wrapper = new LinearLayout(this);
-        wrapper.setPadding(dp(20), dp(5), dp(20), dp(5));
-        wrapper.addView(input, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
-        AlertDialog dialog = new AlertDialog.Builder(this)
-            .setTitle("设置话题小口袋地址")
-            .setMessage("填写你自己的小口袋管理页地址。登录在浏览器中完成，掌心窗不保存登录令牌。")
-            .setView(wrapper)
-            .setNegativeButton("取消", null)
-            .setPositiveButton("保存", null)
-            .create();
-        dialog.setOnShowListener(ignored -> dialog.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener(v -> {
-            String value = input.getText().toString().trim();
-            Uri uri = Uri.parse(value);
-            if (!"https".equalsIgnoreCase(uri.getScheme()) || uri.getHost() == null) {
-                input.setError("请输入有效的 HTTPS 地址"); return;
-            }
-            prefs.edit().putString("admin_url", value).apply();
-            dialog.dismiss();
-            try { startActivity(new Intent(Intent.ACTION_VIEW, uri)); }
-            catch (Exception error) { Toast.makeText(this, "地址已保存，请检查浏览器", Toast.LENGTH_SHORT).show(); }
-        }));
-        dialog.show();
+        startActivity(new Intent(this, PocketActivity.class));
     }
 
     private void showCompanionHomePage() {

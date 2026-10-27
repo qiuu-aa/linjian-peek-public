@@ -1,13 +1,13 @@
 {
-  "latest_version_name": "0.3.9.2",
-  "latest_version_code": 30902,
-  "apk_url": "https://github.com/qiuu-aa/linjian-peek-public/releases/download/v0.3.9.2/Zhangxinchuang-public-v0.3.9.2.apk",
+  "latest_version_name": "0.3.9.3",
+  "latest_version_code": 30903,
+  "apk_url": "https://github.com/qiuu-aa/linjian-peek-public/releases/download/v0.3.9.3/Zhangxinchuang-public-v0.3.9.3.apk",
   "sha256": "a61bcc80c2fcf0ec77fea74a27e357e20d33a38db4130f52bf29f0ebd4f6cf93",
   "required": false,
   "changelog": [
-    "陪伴 → 更多陪伴新增「话题小口袋」入口。",
-    "首次填写自己的小口袋 HTTPS 管理页地址，后续可打开或修改。",
-    "小口袋网页更新后，可查看近 30 天的每日活动并打星、留言。",
-    "版本号升级到 v0.3.9.2 / 30902，沿用原有签名，可覆盖安装。"
+    "话题小口袋改为掌心窗内的原生页面，直接查看每日活动和话题。",
+    "支持在 App 内打星、写留言和修改评价，草稿会在返回列表时保留。",
+    "沿用掌心窗已有连接验证身份，首次填写小口袋地址即可。",
+    "沿用原有固定签名，可覆盖安装。"
   ]
 }
