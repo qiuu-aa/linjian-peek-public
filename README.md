@@ -1,4 +1,10 @@
-# 掌心窗公开版 v0.3.9.1
+# 掌心窗公开版 v0.3.9.2
+
+## v0.3.9.2 话题小口袋
+
+「陪伴 → 更多陪伴」新增可配置的「话题小口袋」入口；在系统浏览器中打开管理页，查看每日活动、打星和留言。评分功能需配套更新小口袋服务。
+详见 [版本说明](docs/public-v0.3.9.2.md)。
+正式 APK：[Zhangxinchuang-public-v0.3.9.2.apk](https://github.com/qiuu-aa/linjian-peek-public/releases/download/v0.3.9.2/Zhangxinchuang-public-v0.3.9.2.apk)。
 
 ## v0.3.9.1 日常随机敲敲
 

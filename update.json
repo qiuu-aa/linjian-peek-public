@@ -1,14 +1,13 @@
 {
-  "latest_version_name": "0.3.9.1",
-  "latest_version_code": 30901,
-  "apk_url": "https://github.com/qiuu-aa/linjian-peek-public/releases/download/v0.3.9.1/Zhangxinchuang-public-v0.3.9.1.apk",
+  "latest_version_name": "0.3.9.2",
+  "latest_version_code": 30902,
+  "apk_url": "https://github.com/qiuu-aa/linjian-peek-public/releases/download/v0.3.9.2/Zhangxinchuang-public-v0.3.9.2.apk",
   "sha256": "0e55bd95b0da50702c710da8ce2febeda2dae43c86fc3c81d89e37db3b1c66b3",
   "required": false,
   "changelog": [
-    "新增日常随机敲敲开关和每日次数设置，默认开启、每天一次。",
-    "随机计划持久化，避开午晚饭，目标至少间隔两小时，90 分钟后过期放弃。",
-    "有效前台、屏幕交互和网络可用时才发送 casual_random_knock，无历史补发。",
-    "保留事件降噪和固定分级熬夜规则。",
-    "版本号升级到 v0.3.9.1 / 30901，固定签名保持不变。"
+    "陪伴 → 更多陪伴新增「话题小口袋」入口。",
+    "首次填写自己的小口袋 HTTPS 管理页地址，后续可打开或修改。",
+    "小口袋网页更新后，可查看近 30 天的每日活动并打星、留言。",
+    "版本号升级到 v0.3.9.2 / 30902，沿用原有签名，可覆盖安装。"
   ]
 }
