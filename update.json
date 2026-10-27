@@ -2,7 +2,7 @@
   "latest_version_name": "0.3.9.3",
   "latest_version_code": 30903,
   "apk_url": "https://github.com/qiuu-aa/linjian-peek-public/releases/download/v0.3.9.3/Zhangxinchuang-public-v0.3.9.3.apk",
-  "sha256": "a61bcc80c2fcf0ec77fea74a27e357e20d33a38db4130f52bf29f0ebd4f6cf93",
+  "sha256": "b9376fa9d247b3268fe84a3977fe4420038fae2e2bf4392d691d4c8bbd587ab4",
   "required": false,
   "changelog": [
     "话题小口袋改为掌心窗内的原生页面，直接查看每日活动和话题。",
