@@ -16,6 +16,10 @@ public final class ForegroundEventModelTest {
         resetDropsPendingCandidate();
         chatGptHelperRoundTripStaysOnChatGpt();
         semanticTimeWindows();
+        resumedUseSurvivesAppSwitches();
+        helpersDoNotStartOrRetargetResumedUse();
+        screenOffAndReconnectDiscardResumedUse();
+        returnThresholdsAndWindowsStayUnchanged();
         lateNightFollowupStages();
         System.out.println("ForegroundEventModelTest: all scenarios passed");
     }
@@ -129,6 +133,74 @@ public final class ForegroundEventModelTest {
         check("soft".equals(LateNightFollowupPolicy.toneForStage(1)), "first reminder is soft");
         check("firm".equals(LateNightFollowupPolicy.toneForStage(2)), "second reminder is firm");
         check("strict".equals(LateNightFollowupPolicy.toneForStage(3)), "later reminders are strict");
+    }
+
+    private static void resumedUseSurvivesAppSwitches() {
+        ReturnActivitySession session = new ReturnActivitySession();
+        long start = 1_000_000L;
+        long sustained = EventPolicyConfig.minutes(2);
+        check(session.start("morning_return_candidate", "2026-10-28", "com.tencent.mm",
+                start, 18_000, sustained), "wake-up starts once after qualifying idle");
+        session.observe("com.android.chrome", true);
+        check(!session.start("morning_return_candidate", "2026-10-28", "com.android.chrome",
+                start + 30_000, 30, sustained), "switch must not replace the original idle gap");
+        session.observe("com.openai.chatgpt", true);
+        check(session.remainingMs(start + 90_000) == 30_000, "app switches retain the original deadline");
+        check(!session.isReady(start + sustained - 1), "do not emit before two minutes");
+        check(session.isReady(start + sustained), "cross-app use qualifies at two minutes");
+        check("com.openai.chatgpt".equals(session.packageName()), "emit with the latest meaningful app");
+        check(session.inactiveSeconds() == 18_000, "keep original inactive duration for metadata");
+        check("2026-10-28".equals(session.day()), "keep the original daily scope");
+        // Cooldown retry does not create a new two-minute interval.
+        session.observe("com.tencent.mm", true);
+        check(session.isReady(start + sustained + 60_000), "cooldown retry remains due across apps");
+        session.reset();
+        check(!session.isPending() && !session.isReady(start + sustained), "completed emission is consumed");
+    }
+
+    private static void helpersDoNotStartOrRetargetResumedUse() {
+        ReturnActivitySession session = new ReturnActivitySession();
+        String[] helpers = {"com.android.launcher3", "com.android.systemui",
+                "com.google.android.inputmethod.latin", "com.google.android.photopicker", "dev.linjian.peek"};
+        for (String pkg : helpers) {
+            session.observe(pkg, PackageClassifier.isMeaningful(PackageClassifier.classify(pkg, "dev.linjian.peek")));
+        }
+        check(!session.isPending(), "helper UI alone cannot start a wake-up");
+        session.start("morning_return_candidate", "2026-10-28", "com.tencent.mm", 1_000, 18_000, 120_000);
+        for (String pkg : helpers) {
+            session.observe(pkg, PackageClassifier.isMeaningful(PackageClassifier.classify(pkg, "dev.linjian.peek")));
+        }
+        check("com.tencent.mm".equals(session.packageName()), "helper UI keeps the latest meaningful package");
+        check(session.isReady(121_000), "brief helper UI must not restart the window");
+    }
+
+    private static void screenOffAndReconnectDiscardResumedUse() {
+        ReturnActivitySession session = new ReturnActivitySession();
+        for (String resetReason : new String[]{"screen off", "service reconnect"}) {
+            session.start("morning_return_candidate", "2026-10-28", "com.tencent.mm", 1_000, 18_000, 120_000);
+            session.reset();
+            session.observe("com.android.chrome", true);
+            check(!session.isReady(999_999) && !session.isPending(), resetReason + " discards pending reminder");
+            check(session.packageName().isEmpty() && session.inactiveSeconds() == 0, resetReason + " clears metadata");
+        }
+        check(!session.start("", "2026-10-28", "com.tencent.mm", 1_000, 30, 120_000),
+                "quick unlock without a qualifying idle gap cannot rearm");
+    }
+
+    private static void returnThresholdsAndWindowsStayUnchanged() {
+        long morning = EventPolicyConfig.minutes(EventPolicyConfig.MORNING_INACTIVE_MINUTES);
+        long afternoon = EventPolicyConfig.minutes(EventPolicyConfig.AFTERNOON_INACTIVE_MINUTES);
+        check(morning == EventPolicyConfig.minutes(240), "morning idle threshold stays four hours");
+        check(afternoon == EventPolicyConfig.minutes(90), "afternoon idle threshold stays ninety minutes");
+        check(EventPolicyConfig.RETURN_SUSTAINED_MINUTES == 2, "sustained window stays two minutes");
+        check(CandidateTimePolicy.returnCandidateType(9 * 60, morning - 1, morning, afternoon).isEmpty(),
+                "short morning idle is still suppressed");
+        check("morning_return_candidate".equals(CandidateTimePolicy.returnCandidateType(6 * 60,
+                morning, morning, afternoon)), "morning starts at six, inclusive");
+        check(CandidateTimePolicy.returnCandidateType(11 * 60, morning, morning, afternoon).isEmpty(),
+                "no wake-up after the morning window");
+        check("afternoon_return_candidate".equals(CandidateTimePolicy.returnCandidateType(15 * 60,
+                afternoon, morning, afternoon)), "shared resumed-use logic preserves afternoon eligibility");
     }
 
     private static ForegroundEventModel baseline(String pkg) {
