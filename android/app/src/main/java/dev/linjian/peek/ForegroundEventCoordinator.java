@@ -29,6 +29,7 @@ public final class ForegroundEventCoordinator {
 
     private static final Object LOCK = new Object();
     private static final ForegroundEventModel MODEL = new ForegroundEventModel();
+    private static final ReturnActivitySession RETURN_SESSION = new ReturnActivitySession();
     private static final Handler HANDLER = new Handler(Looper.getMainLooper());
     private static final Set<String> SHOPPING_PACKAGES = new HashSet<>();
     private static Context appContext;
@@ -44,7 +45,6 @@ public final class ForegroundEventCoordinator {
     private static boolean longSessionEmitted = false;
     private static long shoppingStartedAt = 0;
     private static boolean shoppingEmitted = false;
-    private static String returnCandidatePackage = "";
     private static long lateNightSessionStartedAt = 0;
     private static int lateNightStage = 0;
     private static BroadcastReceiver screenReceiver;
@@ -94,6 +94,7 @@ public final class ForegroundEventCoordinator {
                 ActivityEventStore.logRule(ctx, PackageClassifier.ignoredRule(category), "app_open", pkg);
                 return;
             }
+            RETURN_SESSION.observe(pkg, true);
             if (PackageClassifier.isChatGpt(pkg)) {
                 clearLateNight();
             }
@@ -235,10 +236,10 @@ public final class ForegroundEventCoordinator {
     }
 
     private static void scheduleReturnCandidate(Context ctx, String pkg, long previousAt, long now, int generation) {
-        if (returnRunnable != null && pkg.equals(returnCandidatePackage)) return;
-        if (returnRunnable != null) HANDLER.removeCallbacks(returnRunnable);
-        returnRunnable = null;
-        returnCandidatePackage = "";
+        if (!isDeviceInteractive(ctx)) { clearReturnCandidate(); return; }
+        // Keep the original idle gap and deadline when the user changes apps.
+        // previousAt is refreshed on every activity, so cancelling here loses the wake-up.
+        if (RETURN_SESSION.isPending()) { RETURN_SESSION.observe(pkg, true); return; }
         if (previousAt <= 0) return;
         int minute = minuteOfDay(now);
         String type = CandidateTimePolicy.returnCandidateType(minute, now - previousAt,
@@ -247,8 +248,10 @@ public final class ForegroundEventCoordinator {
         String day = dayId(now);
         String dayKey = "morning_return_candidate".equals(type) ? KEY_MORNING_DAY : KEY_AFTERNOON_DAY;
         if (day.equals(AppPrefs.get(ctx).getString(dayKey, ""))) return;
-        scheduleReturnEmission(pkg, type, dayKey, day, Math.max(1, (now - previousAt) / 1000L), generation,
-                EventPolicyConfig.minutes(EventPolicyConfig.RETURN_SUSTAINED_MINUTES));
+        long sustainedMs = EventPolicyConfig.minutes(EventPolicyConfig.RETURN_SUSTAINED_MINUTES);
+        if (RETURN_SESSION.start(type, day, pkg, now, Math.max(1, (now - previousAt) / 1000L), sustainedMs)) {
+            scheduleReturnEmission(generation, sustainedMs);
+        }
     }
 
     private static void scheduleLateNightCandidate(Context ctx, String pkg, long now, int generation) {
@@ -364,28 +367,41 @@ public final class ForegroundEventCoordinator {
             scheduleLateNightCandidate(ctx, pkg, now, lifecycleGeneration);
         } catch (Exception ignored) { }
     }
-    private static void scheduleReturnEmission(String pkg, String type, String dayKey, String day,
-                                               long inactiveSeconds, int generation, long delayMs) {
-        returnCandidatePackage = pkg;
+    private static void scheduleReturnEmission(int generation, long delayMs) {
         returnRunnable = () -> {
             synchronized (LOCK) {
                 returnRunnable = null;
-                returnCandidatePackage = "";
-                if (appContext == null || generation != lifecycleGeneration || !pkg.equals(activePackage)) return;
+                if (appContext == null || generation != lifecycleGeneration || !RETURN_SESSION.isPending()) return;
+                long now = System.currentTimeMillis();
+                String type = RETURN_SESSION.type();
+                String day = RETURN_SESSION.day();
+                String dayKey = "morning_return_candidate".equals(type) ? KEY_MORNING_DAY : KEY_AFTERNOON_DAY;
+                // No stale wake-ups after screen-off, a date/window change or a completed daily emission.
+                if (!isDeviceInteractive(appContext) || !day.equals(dayId(now))
+                        || day.equals(AppPrefs.get(appContext).getString(dayKey, ""))
+                        || !type.equals(CandidateTimePolicy.returnCandidateType(minuteOfDay(now),
+                                EventPolicyConfig.minutes(24 * 60), AppPrefs.morningInactiveMs(appContext),
+                                AppPrefs.afternoonInactiveMs(appContext)))) {
+                    clearReturnCandidate();
+                    return;
+                }
+                if (!RETURN_SESSION.isReady(now)) {
+                    scheduleReturnEmission(generation, RETURN_SESSION.remainingMs(now));
+                    return;
+                }
                 try {
                     boolean emitted = ActivityEventStore.emitCandidate(appContext, new JSONObject()
                             .put("source", "phone").put("type", type)
-                            .put("title", "长时间无活动后重新活跃").put("package_name", pkg)
+                            .put("title", "长时间无活动后重新活跃").put("package_name", RETURN_SESSION.packageName())
                             .put("action", "sustained_activity_resumed").put("status", "completed")
-                            .put("metadata_json", new JSONObject().put("inactive_seconds", inactiveSeconds)), false);
-                    if (emitted) AppPrefs.get(appContext).edit().putString(dayKey, day).apply();
-                    else if (type.equals(CandidateTimePolicy.returnCandidateType(minuteOfDay(System.currentTimeMillis()),
-                            EventPolicyConfig.minutes(24 * 60), AppPrefs.morningInactiveMs(appContext),
-                            AppPrefs.afternoonInactiveMs(appContext)))) {
-                        scheduleReturnEmission(pkg, type, dayKey, day, inactiveSeconds, generation,
-                                Math.max(60_000L, AppPrefs.globalCandidateCooldownMs(appContext)));
+                            .put("metadata_json", new JSONObject().put("inactive_seconds", RETURN_SESSION.inactiveSeconds())), false);
+                    if (emitted) {
+                        AppPrefs.get(appContext).edit().putString(dayKey, day).apply();
+                        clearReturnCandidate();
+                    } else {
+                        scheduleReturnEmission(generation, Math.max(60_000L, AppPrefs.globalCandidateCooldownMs(appContext)));
                     }
-                } catch (Exception ignored) { }
+                } catch (Exception ignored) { clearReturnCandidate(); }
             }
         };
         HANDLER.postDelayed(returnRunnable, delayMs);
@@ -395,10 +411,14 @@ public final class ForegroundEventCoordinator {
         if (mergeRunnable != null) HANDLER.removeCallbacks(mergeRunnable);
         if (longSessionRunnable != null) HANDLER.removeCallbacks(longSessionRunnable);
         if (shoppingRunnable != null) HANDLER.removeCallbacks(shoppingRunnable);
-        if (returnRunnable != null) HANDLER.removeCallbacks(returnRunnable);
+        clearReturnCandidate();
         clearLateNight();
         mergeRunnable = null; longSessionRunnable = null; shoppingRunnable = null; returnRunnable = null;
-        returnCandidatePackage = "";
+    }
+    private static void clearReturnCandidate() {
+        if (returnRunnable != null) HANDLER.removeCallbacks(returnRunnable);
+        returnRunnable = null;
+        RETURN_SESSION.reset();
     }
     private static void clearShopping() {
         if (shoppingRunnable != null) HANDLER.removeCallbacks(shoppingRunnable);
@@ -425,6 +445,7 @@ public final class ForegroundEventCoordinator {
                 if (intent != null && Intent.ACTION_SCREEN_OFF.equals(intent.getAction())) {
                     synchronized (LOCK) {
                         clearLateNight();
+                        clearReturnCandidate();
                         if (longSessionRunnable != null) HANDLER.removeCallbacks(longSessionRunnable);
                         longSessionRunnable = null;
                         activePackage = "";

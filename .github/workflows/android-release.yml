@@ -73,6 +73,7 @@ jobs:
           javac -encoding UTF-8 -source 11 -target 11 \
             -d android/build/policy-tests \
             android/app/src/main/java/dev/linjian/peek/ForegroundEventModel.java \
+            android/app/src/main/java/dev/linjian/peek/ReturnActivitySession.java \
             android/app/src/main/java/dev/linjian/peek/PackageClassifier.java \
             android/app/src/main/java/dev/linjian/peek/EventPolicyConfig.java \
             android/app/src/main/java/dev/linjian/peek/LateNightFollowupPolicy.java \
